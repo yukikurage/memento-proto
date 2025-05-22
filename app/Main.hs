@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad (forM)
+import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -20,13 +21,14 @@ main = do
       input <- TIO.readFile inputFile
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
-        Right exprs -> do
-          case typeCheckProgram exprs of
+        Right program -> do
+          case typeCheckProgram program of
             Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right (typ, effects) -> do
-              putStrLn $ "Type: " ++ show typ
-              putStrLn $ "Effects: " ++ show (Set.toList effects)
-              let jsCode = generateJS exprs
+            Right typeEnv -> do
+              putStrLn $ "Type checking successful"
+              putStrLn $ "Definitions: " ++ show (Map.size typeEnv)
+              mapM_ printTypeInfo (Map.toList typeEnv)
+              let jsCode = generateJS program
               TIO.writeFile outputFile jsCode
     [inputFile] -> do
       let baseName = takeBaseName inputFile
@@ -39,13 +41,18 @@ main = do
       input <- TIO.readFile inputFile
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
-        Right exprs -> do
-          case typeCheckProgram exprs of
+        Right program -> do
+          case typeCheckProgram program of
             Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right (typ, effects) -> do
-              putStrLn $ "Type: " ++ show typ
-              putStrLn $ "Effects: " ++ show (Set.toList effects)
-              let jsCode = generateJS exprs
+            Right typeEnv -> do
+              putStrLn $ "Type checking successful"
+              putStrLn $ "Definitions: " ++ show (Map.size typeEnv)
+              mapM_ printTypeInfo (Map.toList typeEnv)
+              let jsCode = generateJS program
               TIO.writeFile outputFile jsCode
               putStrLn $ "Output written to: " ++ outputFile
     _ -> putStrLn "Usage: memento-proto <input-file.mmt> [output-file.js]"
+ where
+  printTypeInfo (name, typ) = do
+    putStrLn $ "Definition " ++ T.unpack name ++ ":"
+    putStrLn $ "  Type: " ++ show typ

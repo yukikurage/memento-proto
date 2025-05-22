@@ -1,0 +1,10 @@
+val is_even : (number -> bool with <>) = (n ->
+  if n == 0 then true else (is_odd <| (n - 1))
+);
+
+val is_odd : (number -> bool with <>) = (n ->
+  if n == 0 then false else (is_even <| (n - 1))
+);
+
+val test_even : bool = (is_even <| 4);
+val test_odd : bool = (is_odd <| 3);

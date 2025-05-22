@@ -8,7 +8,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void
-import Language.Memento.Syntax
+import Language.Memento.Syntax (BinOp (..), Definition (..), Effect (..), Effects, Expr (..), Program (..), Type (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -50,42 +50,59 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do"]
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv"]
 
 -- | 識別子
 identifier :: Parser Text
 identifier = (lexeme . try) $ do
-  name <- T.pack <$> ((:) <$> letterChar <*> many alphaNumChar)
+  name <- T.pack <$> ((:) <$> letterChar <*> many (alphaNumChar <|> char '_'))
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
--- | 型の項
-typeTerm :: Parser Type
-typeTerm =
+-- | エフェクトのパーサー
+effectParser :: Parser Effect
+effectParser =
+  (Throw <$ rword "Throw")
+    <|> (ZeroDiv <$ rword "ZeroDiv")
+
+effectsParser :: Parser Effects
+effectsParser =
+  symbol "<"
+    *> (Set.fromList <$> sepBy effectParser (symbol ","))
+    <* symbol ">"
+      <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
+
+-- | 型の項 (非関数型、括弧で囲まれた型)
+typeTerm' :: Parser Type
+typeTerm' =
   choice
-    [ try $ parens typeExpr
+    [ try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
     ]
 
--- | 型の演算子
-typeOp :: Text -> Parser Text
-typeOp n = (lexeme . try) (string n <* notFollowedBy (symbolChar <|> punctuationChar))
+-- | 関数型の右辺のパーサー (-> Type [with Effects])
+functionTypeSuffixParser :: Type -> Parser Type
+functionTypeSuffixParser argType = do
+  symbol "->"
+  retType <- typeExpr -- Changed from typeExpr' to typeExpr for mutual recursion
+  effects <- option Set.empty (rword "with" *> effectsParser)
+  return $ TFunction argType retType effects
 
--- | 型の演算子の優先順位テーブル
-typeOperatorTable :: [[Operator Parser Type]]
-typeOperatorTable =
-  [ [InfixR ((\t1 t2 -> TFunction t1 t2 Set.empty) <$ typeOp "->")]
-  ]
-
--- | 型レベルの式
+-- | 型のパーサー (関数型を含む)
 typeExpr :: Parser Type
-typeExpr = makeExprParser typeTerm typeOperatorTable
+typeExpr =
+  try
+    ( do
+        argType <- typeTerm'
+        functionTypeSuffixParser argType
+    )
+    <|> typeTerm'
 
--- | 型
+-- | 型注釈のパーサー
 typeAnnotation :: Parser Type
-typeAnnotation = typeExpr
+typeAnnotation = typeExpr -- Uses the new typeExpr
 
 -- | 式
 expr :: Parser Expr
@@ -143,7 +160,7 @@ lambdaExpr = do
   name <- identifier
   mType <- optional $ do
     void $ symbol ":"
-    typeTerm
+    typeTerm'
   void $ symbol "->"
   body <- expr
   return $ Lambda name mType body
@@ -155,10 +172,22 @@ doExpr = (lexeme . try) $ do
   name <- identifier
   return $ Do name
 
--- | プログラム
-program :: Parser Expr
-program = between sc eof expr
+-- | 値定義のパーサー
+definitionParser :: Parser Definition
+definitionParser = do
+  rword "val"
+  name <- identifier
+  symbol ":"
+  typ <- typeAnnotation
+  symbol ":="
+  body <- expr
+  symbol ";" -- Ensure semicolon termination
+  return $ ValDef name typ body
+
+-- | プログラムのパーサー (トップレベル定義のリスト)
+program :: Parser Program
+program = Program <$> between sc eof (many definitionParser)
 
 -- | プログラムのパース
-parseProgram :: Text -> Either (ParseErrorBundle Text Void) Expr
+parseProgram :: Text -> Either (ParseErrorBundle Text Void) Program
 parseProgram = parse program ""
