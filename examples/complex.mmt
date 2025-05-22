@@ -1,12 +1,12 @@
 // 数値演算と真偽値の混合テスト
-42 |> x : number;
-true |> cond : bool;
+42 -> x : number;
+true -> cond : bool;
 
 // 型注釈なしのラムダ式（引数から数値型と推論される）
-(n; n * 2) |> double;
+(n; n * 2) -> double;
 
 // 条件分岐を含むラムダ式
-(val; if (cond) then (val + 10) else (val - 5)) |> conditional;
+(val; if (cond) then (val + 10) else (val - 5)) -> conditional;
 
 // 関数適用とネスト
-x |> double |> conditional 
+x -> double -> conditional 

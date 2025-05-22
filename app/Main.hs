@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad (forM)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
@@ -17,17 +18,15 @@ main = do
   case args of
     [inputFile, outputFile] -> do
       input <- TIO.readFile inputFile
-      putStrLn $ "Input:\n" ++ T.unpack input
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right exprs -> do
-          putStrLn $ "Parsed: " ++ show exprs
           case typeCheckProgram exprs of
             Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right types -> do
-              putStrLn $ "Types: " ++ show types
+            Right (typ, effects) -> do
+              putStrLn $ "Type: " ++ show typ
+              putStrLn $ "Effects: " ++ show (Set.toList effects)
               let jsCode = generateJS exprs
-              putStrLn $ "Generated JS:\n" ++ T.unpack jsCode
               TIO.writeFile outputFile jsCode
     [inputFile] -> do
       let baseName = takeBaseName inputFile
@@ -38,17 +37,15 @@ main = do
       createDirectoryIfMissing True jsDir
 
       input <- TIO.readFile inputFile
-      putStrLn $ "Input:\n" ++ T.unpack input
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right exprs -> do
-          putStrLn $ "Parsed: " ++ show exprs
           case typeCheckProgram exprs of
             Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right types -> do
-              putStrLn $ "Types: " ++ show types
+            Right (typ, effects) -> do
+              putStrLn $ "Type: " ++ show typ
+              putStrLn $ "Effects: " ++ show (Set.toList effects)
               let jsCode = generateJS exprs
-              putStrLn $ "Generated JS:\n" ++ T.unpack jsCode
               TIO.writeFile outputFile jsCode
               putStrLn $ "Output written to: " ++ outputFile
     _ -> putStrLn "Usage: memento-proto <input-file.mmt> [output-file.js]"

@@ -4,6 +4,7 @@ module Language.Memento.Parser where
 
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void
@@ -49,7 +50,7 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool"]
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do"]
 
 -- | 識別子
 identifier :: Parser Text
@@ -73,7 +74,8 @@ typeAnnotation =
         void $ symbol ","
         t2 <- typeAnnotation
         void $ symbol ")"
-        return $ TFunction t1 t2
+        -- エフェクトは型注釈では省略され、推論される
+        return $ TFunction t1 t2 Set.empty
     ]
 
 -- | 式
@@ -84,44 +86,47 @@ expr = makeExprParser term operatorTable
 term :: Parser Expr
 term =
   choice
-    [ Number <$> number
-    , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
-    , try ifExpr
-    , try $ parens expr
+    [ try $ parens expr
     , try lambdaExpr
+    , try doExpr
+    , ifExpr
     , Var <$> identifier
+    , Number <$> number
+    , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]
+
+op :: Text -> Parser Text
+op n = (lexeme . try) (string n <* notFollowedBy (symbolChar <|> punctuationChar))
 
 -- | 演算子の優先順位テーブル
 operatorTable :: [[Operator Parser Expr]]
 operatorTable =
   [
-    [ InfixL (BinOp Mul <$ symbol "*")
-    , InfixL (BinOp Div <$ symbol "/")
+    [ InfixL (BinOp Mul <$ op "*")
+    , InfixL (BinOp Div <$ op "/")
     ]
   ,
-    [ InfixL (BinOp Add <$ symbol "+")
-    , InfixL (BinOp Sub <$ symbol "-")
+    [ InfixL (BinOp Add <$ op "+")
+    , InfixL (BinOp Sub <$ op "-")
     ]
   ,
-    [ InfixN (BinOp Eq <$ symbol "==")
-    , InfixN (BinOp Lt <$ symbol "<")
+    [ InfixN (BinOp Eq <$ op "==")
+    , InfixN (BinOp Lt <$ op "<")
+    , InfixN (BinOp Gt <$ op ">")
     ]
-  ,
-    [ InfixL (flip Apply <$ symbol "|>")
-    ]
-  , [InfixL (Apply <$ symbol "<|")]
+  , [InfixR (Apply <$ op "<-")]
+  , [InfixL (flip Apply <$ op "->")]
   ]
 
 -- | if式
 ifExpr :: Parser Expr
 ifExpr = (lexeme . try) $ do
   rword "if"
-  cond <- expr
+  cond <- term
   rword "then"
-  thenExpr <- expr
+  thenExpr <- term
   rword "else"
-  If cond thenExpr <$> expr
+  If cond thenExpr <$> term
 
 -- | ラムダ式
 lambdaExpr :: Parser Expr
@@ -132,6 +137,13 @@ lambdaExpr = do
     typeAnnotation
   void $ symbol ";"
   Lambda name mType <$> expr
+
+-- | do構文
+doExpr :: Parser Expr
+doExpr = (lexeme . try) $ do
+  rword "do"
+  name <- identifier
+  return $ Do name
 
 -- | プログラム
 program :: Parser Expr

@@ -36,6 +36,8 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - memento-proto
+    - directory
+    - filepath
 
 tests:
   memento-proto-test:
