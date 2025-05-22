@@ -55,7 +55,7 @@ reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", 
 -- | 識別子
 identifier :: Parser Text
 identifier = (lexeme . try) $ do
-  name <- T.pack <$> ((:) <$> letterChar <*> many alphaNumChar)
+  name <- T.pack <$> ((:) <$> letterChar <*> many (alphaNumChar <|> char '_'))
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
@@ -71,15 +71,16 @@ effectsParser =
   symbol "<"
     *> (Set.fromList <$> sepBy effectParser (symbol ","))
     <* symbol ">"
-    <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
+      <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
 
 -- | 型の項 (非関数型、括弧で囲まれた型)
 typeTerm' :: Parser Type
-typeTerm' = choice
-  [ try $ parens typeExpr -- Recursive call to the new typeExpr
-  , TNumber <$ rword "number"
-  , TBool <$ rword "bool"
-  ]
+typeTerm' =
+  choice
+    [ try $ parens typeExpr -- Recursive call to the new typeExpr
+    , TNumber <$ rword "number"
+    , TBool <$ rword "bool"
+    ]
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
 functionTypeSuffixParser :: Type -> Parser Type
@@ -91,21 +92,17 @@ functionTypeSuffixParser argType = do
 
 -- | 型のパーサー (関数型を含む)
 typeExpr :: Parser Type
-typeExpr = try (do
-    argType <- typeTerm'
-    functionTypeSuffixParser argType
-  ) <|> typeTerm'
+typeExpr =
+  try
+    ( do
+        argType <- typeTerm'
+        functionTypeSuffixParser argType
+    )
+    <|> typeTerm'
 
 -- | 型注釈のパーサー
 typeAnnotation :: Parser Type
 typeAnnotation = typeExpr -- Uses the new typeExpr
-
--- | 型とエフェクトのペアをパース (val宣言用)
-typeWithEffectsParser :: Parser (Type, Effects)
-typeWithEffectsParser = do
-  t <- typeExpr
-  effs <- option Set.empty (rword "with" *> effectsParser)
-  return (t, effs)
 
 -- | 式
 expr :: Parser Expr
@@ -163,17 +160,10 @@ lambdaExpr = do
   name <- identifier
   mType <- optional $ do
     void $ symbol ":"
-    typeTerm
+    typeTerm'
   void $ symbol "->"
   body <- expr
   return $ Lambda name mType body
-
--- | do構文
-doExpr :: Parser Expr
-doExpr = (lexeme . try) $ do
-  rword "do"
-  name <- identifier
-  return $ Do name
 
 -- | do構文
 doExpr :: Parser Expr
@@ -188,11 +178,11 @@ definitionParser = do
   rword "val"
   name <- identifier
   symbol ":"
-  (typ, effs) <- typeWithEffectsParser
-  symbol "="
+  typ <- typeAnnotation
+  symbol ":="
   body <- expr
   symbol ";" -- Ensure semicolon termination
-  return $ ValDef name typ effs body
+  return $ ValDef name typ body
 
 -- | プログラムのパーサー (トップレベル定義のリスト)
 program :: Parser Program

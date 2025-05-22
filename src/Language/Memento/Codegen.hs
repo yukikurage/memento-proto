@@ -48,19 +48,20 @@ generateJS (Program definitions) =
     , T.intercalate "\n\n" (map generateDefinition definitions)
     , finalExecutionBlock
     ]
-  where
-    generateDefinition :: Definition -> Text
-    generateDefinition (ValDef name _ _ expr) = -- Ignoring type and effects for codegen
-      T.concat ["const ", name, " = ", generateExpr expr, ";"]
+ where
+  generateDefinition :: Definition -> Text
+  generateDefinition (ValDef name _ expr) =
+    -- Ignoring type and effects for codegen
+    T.concat ["const ", name, " = (", generateExpr expr, ")[1];"]
 
-    finalExecutionBlock :: Text
-    finalExecutionBlock
-      | null definitions = "\n\n// No definitions found to execute."
-      | otherwise =
-          let lastDefName = (\(ValDef name _ _ _) -> name) (last definitions)
-              mainDefExists = any (\(ValDef name _ _ _) -> name == "main") definitions
-              nameToExecute = if mainDefExists then "main" else lastDefName
-          in T.concat ["\n\nconsole.log(globalHandler(", nameToExecute, "));"]
+  finalExecutionBlock :: Text
+  finalExecutionBlock
+    | null definitions = "\n\n// No definitions found to execute."
+    | otherwise =
+        let lastDefName = (\(ValDef name _ _) -> name) (last definitions)
+            mainDefExists = any (\(ValDef name _ _) -> name == "main") definitions
+            nameToExecute = if mainDefExists then "main" else lastDefName
+         in T.concat ["\n\nconsole.log(globalHandler(", nameToExecute, "()));"]
 
 {- | 式のJavaScriptコードの生成
 新しいセマンティクス: エフェクトシステムを使用したコード生成
@@ -68,7 +69,7 @@ generateJS (Program definitions) =
 generateExpr :: Expr -> Text
 generateExpr = \case
   -- 基本値
-  Var name -> T.concat ["ret(", name, ")"]
+  Var name -> name -- ret() で包まない
   Number n -> T.concat ["ret(", T.pack $ show n, ")"]
   Bool b -> T.concat ["ret(", T.pack $ if b then "true" else "false", ")"]
   -- 二項演算子

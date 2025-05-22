@@ -1,15 +1,15 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module Language.Memento.Syntax
-  ( Effect (..),
-    Effects,
-    Type (..),
-    Expr (..),
-    BinOp (..),
-    Definition (..), -- Added Definition
-    Program (..), -- Added Program
-    TypeError (..),
-  )
+module Language.Memento.Syntax (
+  Effect (..),
+  Effects,
+  Type (..),
+  Expr (..),
+  BinOp (..),
+  Definition (..), -- Added Definition
+  Program (..), -- Added Program
+  TypeError (..),
+)
 where
 
 import Data.Set (Set)
@@ -58,7 +58,7 @@ data BinOp
 
 -- | 値定義の型
 data Definition
-  = ValDef Text Type Effects Expr -- 変数名, 型, エフェクト, 式
+  = ValDef Text Type Expr -- 変数名, 型, 式
   deriving (Show, Eq, Generic)
 
 -- | プログラムの型 (トップレベル定義のリスト)
@@ -69,7 +69,8 @@ newtype Program = Program {getDefinitions :: [Definition]}
 data TypeError
   = TypeMismatch Type Type -- 期待する型と実際の型が異なる
   | UnboundVariable Text -- 未定義の変数
-  | CannotInferType Expr -- 型を推論できな
+  | CannotInferType Expr -- 型を推論できない
   | UndefinedEffect Text -- 未定義のエフェクト
-  | CustomErrorType Text -- カスタムエラーメッセージ
+  | EffectMismatch Effects Effects -- エフェクトが一致しない (実際のエフェクト, 期待されるエフェクト)
+  | CustomErrorType Text -- カスタムメッセージ
   deriving (Show, Eq)

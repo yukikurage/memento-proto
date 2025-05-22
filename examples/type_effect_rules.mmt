@@ -1,7 +1,8 @@
-val x_ok : number with <Throw> = (1 |> y -> y); // RHS effects empty, subset of <Throw>
-
 // Example of a function whose body has effects, declared in type
-val process : (number -> number with <Throw>) = (input -> (op throw) <| input);
+val process : (number -> number with <Throw>) := (input -> ((do throw) <| input));
 
 // Example of a val whose defining expr has effects
-val y_direct_throw : number with <Throw> = ((op throw) <| 1);
+// val y_direct_throw : number with <Throw> := ((do throw) <| 1);
+
+val main : number -> number := 
+  x -> 1 + 2;
