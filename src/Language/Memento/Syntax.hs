@@ -21,13 +21,22 @@ import Data.Text (Text)
 import GHC.Generics (Generic)
 
 -- | エフェクトの定義
-data Effect
-  = ZeroDiv -- ゼロ除算エフェクト
-  | Throw -- 例外エフェクト
-  deriving (Show, Eq, Ord, Generic)
+data Effect = Effect Text deriving (Show, Eq, Ord, Generic) -- Modified to take Text
 
 -- | コンストラクタ定義
 data ConstructorDef = ConstructorDef Text Type deriving (Show, Eq, Generic)
+
+-- | エフェクトオペレータのシグネチャ定義
+data OperatorDef = OperatorDef Text Type deriving (Show, Eq, Generic)
+
+-- | エフェクト定義
+data EffectDef = EffectDef Text [OperatorDef] deriving (Show, Eq, Generic)
+
+-- | ハンドラ節の定義
+data HandlerClause
+  = HandlerClause Text Text Text Expr -- オペレータ名, 引数変数, 継続変数, 式
+  | HandlerReturnClause Text Expr -- 変数名, 式
+  deriving (Show, Eq, Generic)
 
 -- エフェクトのセット型
 type Effects = Set Effect
@@ -51,6 +60,7 @@ data Expr
   | Apply Expr Expr -- 関数適用
   | Do Text -- do name 構文
   | Match Text [Clause] -- match式 (scrutinee, clauses)
+  | Handle Effects Expr [HandlerClause] -- ハンドル式 (ハンドルするエフェクト, 本体, ハンドラ節)
   deriving (Show, Eq, Generic)
 
 -- | 二項演算子の型
@@ -79,6 +89,7 @@ data Clause = Clause Pattern Expr -- パターン, 式
 data Definition
   = ValDef Text Type Expr -- 変数名, 型, 式
   | DataDef Text [ConstructorDef] -- データ型名, コンストラクタ定義のリスト
+  | EffectDef Text [OperatorDef] -- エフェクト名, オペレータ定義のリスト
   deriving (Show, Eq, Generic)
 
 -- | プログラムの型 (トップレベル定義のリスト)

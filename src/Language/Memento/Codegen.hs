@@ -47,6 +47,8 @@ generateJS (Program definitions) =
     , "\n\n// Generated ADT Constructor functions\n"
     , generateConstructorWrapperFunctions definitions
     , "\n\n// Generated Value definitions\n"
+    -- EffectDef and DataDef (other than their constructor wrappers) do not produce direct top-level JS definitions here.
+    -- ValDefs are assumed to be computations that result in a value after global handling.
     , T.intercalate "\n\n" (map generateDefinition (filter isValDef definitions))
     , finalExecutionBlock
     ]
@@ -193,6 +195,63 @@ generateExpr = \case
           , T.pack "  return _result;"
           , T.pack "})"
           ]
+  Handle handledExpr _effectsToHandle handlerClauses -> -- _effectsToHandle is not used in codegen
+    let handledExprJs = generateExpr handledExpr
+        (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
+
+        -- Generate JS for the return clause (assuming exactly one for simplicity here, TypeChecker ensures at least one)
+        -- If multiple return clauses were possible and meaningful, logic would need to select/merge.
+        -- For now, take the first one. The type checker should ensure all return clauses unify to the same type.
+        returnClauseJs = case returnClauses of
+          (HandlerReturnClause retVar bodyExpr : _) ->
+            let bodyJs = generateExpr bodyExpr
+             in T.unlines
+                  [ "    const " <> retVar <> " = _handled_val_[1];" -- Bind retVar to the unwrapped value
+                  , "    return " <> bodyJs <> ";" -- Execute body
+                  ]
+          _ -> "// Should be caught by type checker: No return clause found\n    return [\"op\", \"error\", \"No return clause\", (v) => ret(v)];" -- Fallback, should not happen
+
+        -- Generate JS for operator clauses as a switch or if-else-if chain
+        opClausesJs = if null opClauses
+          then T.pack "      // No operator clauses\n"
+          else T.concat $ map (\(HandlerClause opName argVar contVar bodyExpr) ->
+            let bodyJs = generateExpr bodyExpr
+            in T.unlines
+                [ "      if (_op_name_ === \"" <> opName <> "\") {"
+                , "        const " <> argVar <> " = _op_arg_;"
+                , "        const " <> contVar <> " = (_val_for_k_) => _op_cont_(_val_for_k_);"
+                , "        return " <> bodyJs <> ";"
+                , "      }"
+                ]
+          ) opClauses
+        
+        -- Default case for operations not handled by specific clauses
+        defaultOpCaseJs = "      else {\n        return [\"op\", _op_name_, _op_arg_, _op_cont_]; // Re-perform unhandled op\n      }"
+
+     in T.unlines
+          [ "bind(" <> handledExprJs <> ", (_handled_val_) => {"
+          , "  if (_handled_val_[0] === \"ret\") {"
+          , returnClauseJs
+          , "  } else { // Operation"
+          , "    const _op_name_ = _handled_val_[1];"
+          , "    const _op_arg_ = _handled_val_[2];"
+          , "    const _op_cont_ = _handled_val_[3];"
+          , opClausesJs
+          , defaultOpCaseJs
+          , "  }"
+          , "})"
+          ]
+
+-- Helper to partition HandlerClauses (if not already available or to keep logic local)
+-- This is a simple version; a more robust one might be in Syntax or a Util module.
+partitionHandlerClauses :: [HandlerClause] -> ([HandlerClause], [HandlerClause])
+partitionHandlerClauses clauses = go clauses ([], [])
+  where
+    go [] acc = acc
+    go (c:cs) (ops, rets) = case c of
+      HandlerClause{} -> go cs (ops ++ [c], rets)
+      HandlerReturnClause{} -> go cs (ops, rets ++ [c])
+
 
 generateClause :: String -> Text -> Clause -> (Text, Text, Text) -- (condition, bindingsJs, branchJs)
 generateClause matchArgName _adtName (Clause pattern branchExpr) =

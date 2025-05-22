@@ -54,7 +54,7 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch"] -- Added "data", "branch"
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch", "effect", "handle", "to"] -- Added "effect", "handle", "to"
 
 -- | 識別子
 identifier :: Parser Text
@@ -76,6 +76,16 @@ constructorDefinitionParser = lexeme $ do
 
   return $ ConstructorDef name typ
 
+{- | エフェクトオペレータ定義のパーサー
+例: NumBool : number -> bool
+-}
+operatorDefParser :: Parser OperatorDef
+operatorDefParser = lexeme $ do
+  name <- identifier
+  symbol ":"
+  typ <- typeExpr
+  return $ OperatorDef name typ
+
 {- | データ定義のパーサー
 例: data MyList [ Nil, Cons : number -> MyList ];
 -}
@@ -86,6 +96,17 @@ dataDefinitionParser = lexeme $ do
   constructors <- brackets (sepBy constructorDefinitionParser (symbol ","))
   symbol ";"
   return $ DataDef name constructors
+
+{- | エフェクト定義のパーサー
+例: effect Trans [ NumBool : number -> bool, BoolNum : bool -> number ];
+-}
+effectDefinitionParser :: Parser Definition
+effectDefinitionParser = lexeme $ do
+  rword "effect"
+  name <- identifier
+  operators <- brackets (sepBy operatorDefParser (symbol ","))
+  symbol ";"
+  return $ EffectDef name operators
 
 -- | パターンパーサー
 patternParser :: Parser Pattern
@@ -123,11 +144,38 @@ matchExprParser = lexeme $ do
   clauses <- brackets (sepBy (try clauseParser) (symbol ",")) -- List of clauses
   return $ Match scrutinee clauses
 
+{- | ハンドラ節のパーサー
+例:
+  (NumBool n to k) -> n > 0 |> k
+  x -> x |> Right
+-}
+handlerClauseParser :: Parser HandlerClause
+handlerClauseParser = lexeme $ do
+  rword "("
+  clause <-
+    try
+      ( do
+          opName <- identifier
+          argVar <- identifier
+          rword "to"
+          kVar <- identifier
+          rword ")"
+          rword "->"
+          body <- expr
+          return $ HandlerClause opName argVar kVar body
+      )
+      <|> ( do
+              retVar <- identifier
+              rword ")"
+              rword "->"
+              body <- expr
+              return $ HandlerReturnClause retVar body
+          )
+  return clause
+
 -- | エフェクトのパーサー
 effectParser :: Parser Effect
-effectParser =
-  (Throw <$ rword "Throw")
-    <|> (ZeroDiv <$ rword "ZeroDiv")
+effectParser = Effect <$> identifier -- Parses any identifier as an Effect
 
 effectsParser :: Parser Effects
 effectsParser =
@@ -168,6 +216,16 @@ typeExpr =
 typeAnnotation :: Parser Type
 typeAnnotation = typeExpr -- Uses the new typeExpr
 
+-- | ハンドル式のパーサー
+-- 例: handle <Trans, Throw> c [ (NumBool n to k) -> n > 0 |> k, x -> x |> Right ]
+handlerExprParser :: Parser Expr
+handlerExprParser = lexeme $ do
+  rword "handle"
+  effects <- effectsParser
+  body <- expr
+  clauses <- brackets (sepBy handlerClauseParser (symbol ","))
+  return $ Handle effects body clauses
+
 -- | 式
 expr :: Parser Expr
 expr = makeExprParser term operatorTable
@@ -180,6 +238,7 @@ term =
     , try lambdaExpr
     , try doExpr
     , try matchExprParser -- Added matchExprParser
+    , try handlerExprParser -- Added handlerExprParser
     , ifExpr
     , Var <$> identifier
     , Number <$> number
@@ -244,6 +303,7 @@ definitionParser =
     choice
       [ try valDefinitionParser
       , try dataDefinitionParser -- Added dataDefinitionParser
+      , try effectDefinitionParser -- Added effectDefinitionParser
       ]
 
 valDefinitionParser :: Parser Definition
