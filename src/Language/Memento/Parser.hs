@@ -8,7 +8,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void
-import Language.Memento.Syntax (BinOp (..), Definition (..), Effect (..), Effects, Expr (..), Program (..), Type (..))
+import Language.Memento.Syntax
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
@@ -35,6 +35,10 @@ symbol = L.symbol sc
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
+-- | 角括弧で囲まれた式
+brackets :: Parser a -> Parser a
+brackets = between (symbol "[") (symbol "]")
+
 -- | 数値（整数または小数）
 number :: Parser Double
 number =
@@ -50,7 +54,7 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv"]
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch"] -- Added "data", "branch"
 
 -- | 識別子
 identifier :: Parser Text
@@ -59,6 +63,65 @@ identifier = (lexeme . try) $ do
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
+
+{- | コンストラクタ定義のパーサー
+例: Cons : number -> bool
+-}
+constructorDefinitionParser :: Parser ConstructorDef
+constructorDefinitionParser = lexeme $ do
+  name <- identifier
+  symbol ":"
+
+  typ <- typeExpr
+
+  return $ ConstructorDef name typ
+
+{- | データ定義のパーサー
+例: data MyList [ Nil, Cons : number -> MyList ];
+-}
+dataDefinitionParser :: Parser Definition
+dataDefinitionParser = lexeme $ do
+  rword "data"
+  name <- identifier
+  constructors <- brackets (sepBy constructorDefinitionParser (symbol ","))
+  symbol ";"
+  return $ DataDef name constructors
+
+-- | パターンパーサー
+patternParser :: Parser Pattern
+patternParser =
+  lexeme $
+    choice
+      [ -- コンストラクタパターン: (ConstructorName var1 var2 ...)
+        try $ do
+          constructorName <- identifier
+          varNames <- many identifier -- Zero or more variable names
+          return $ PConstructor constructorName varNames
+      , -- ワイルドカードパターン: _
+        PWildcard <$ symbol "_"
+      , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
+        PVar <$> identifier
+      ]
+
+{- | match節のパーサー
+例: ( (Cons x xs) ) -> x
+-}
+clauseParser :: Parser Clause
+clauseParser = lexeme $ do
+  pat <- parens patternParser -- Pattern enclosed in parentheses
+  symbol "->"
+  ex <- expr
+  return $ Clause pat ex
+
+{- | match式のパーサー
+例: branch myValue [ ( (Some x) ) -> x, ( (None) ) -> 0 ]
+-}
+matchExprParser :: Parser Expr
+matchExprParser = lexeme $ do
+  rword "branch"
+  scrutinee <- identifier
+  clauses <- brackets (sepBy (try clauseParser) (symbol ",")) -- List of clauses
+  return $ Match scrutinee clauses
 
 -- | エフェクトのパーサー
 effectParser :: Parser Effect
@@ -80,6 +143,7 @@ typeTerm' =
     [ try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
+    , TAlgebraicData <$> identifier -- For ADT names
     ]
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
@@ -115,6 +179,7 @@ term =
     [ try $ parens expr
     , try lambdaExpr
     , try doExpr
+    , try matchExprParser -- Added matchExprParser
     , ifExpr
     , Var <$> identifier
     , Number <$> number
@@ -174,7 +239,15 @@ doExpr = (lexeme . try) $ do
 
 -- | 値定義のパーサー
 definitionParser :: Parser Definition
-definitionParser = do
+definitionParser =
+  lexeme $
+    choice
+      [ try valDefinitionParser
+      , try dataDefinitionParser -- Added dataDefinitionParser
+      ]
+
+valDefinitionParser :: Parser Definition
+valDefinitionParser = do
   rword "val"
   name <- identifier
   symbol ":"

@@ -1,0 +1,38 @@
+// examples/adt_type_errors.mmt
+
+data MyData [
+  MakeNum : number -> MyData,
+  MakeBool : bool -> MyData
+];
+
+// Error: Branches return different types (number vs bool)
+val type_mismatch_branches : (MyData -> number) := // Declared to return number
+  branch MyData [
+    (MakeNum n) -> n,
+    (MakeBool b) -> b // Error: b is bool, expected number
+  ];
+
+// Error: Pattern arity mismatch
+val arity_mismatch : (MyData -> number) :=
+  branch MyData [
+    (MakeNum n m) -> n + m, // Error: MakeNum takes 1 arg, pattern has 2
+    (MakeBool b) -> if b then 1 else 0
+  ];
+
+// Error: Scrutinee is not an ADT
+val not_adt_scrutinee : (number -> number) :=
+  branch 10 [ // Error: 10 is not an ADT type
+    (_) -> 0
+  ];
+
+// Error: Constructor not part of ADT
+data AnotherData [ OnlyCons : AnotherData ];
+val constructor_mismatch : (MyData -> number) :=
+  branch MyData [
+    (OnlyCons) -> 0, // Error: OnlyCons is not a constructor of MyData
+    (_) -> 1
+  ];
+
+
+// Dummy main
+val main : number := 0; // This file is for static errors

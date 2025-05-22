@@ -1,0 +1,29 @@
+// examples/adt_simple_def.mmt
+
+// Define a simple ADT for optional numbers
+data MaybeNum [
+  None : MaybeNum,
+  Some : number -> MaybeNum
+];
+
+// Create an instance of Some
+val present_num : MaybeNum := 10 |> Some;
+
+// Create an instance of None
+val absent_num : MaybeNum := None;
+
+// Function that uses pattern matching to extract value or return default
+val get_num_or_default : (MaybeNum -> number) := 
+  branch MaybeNum [
+    (Some n) -> n,
+    (None)   -> 0 // Default value if None
+  ];
+
+// Test with Some
+val test_some : number := 42 |> Some |> get_num_or_default; // Expected: 42
+
+// Test with None
+val test_none : number := None |> get_num_or_default;    // Expected: 0
+
+// Simple main to ensure it can be processed (though execution isn't the primary test here)
+val main : number -> number := x -> test_some;

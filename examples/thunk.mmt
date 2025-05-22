@@ -1,7 +1,0 @@
-// thunkの例（遅延評価）
-(x -> 
-  if (x == 0) then 42 else (1000 / x)
-) |> safeDiv ->
-
-// 0で評価してもエラーにならない
-0 |> safeDiv 
