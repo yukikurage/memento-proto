@@ -60,23 +60,32 @@ identifier = (lexeme . try) $ do
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
+-- | 型の項
+typeTerm :: Parser Type
+typeTerm =
+  choice
+    [ try $ parens typeExpr
+    , TNumber <$ rword "number"
+    , TBool <$ rword "bool"
+    ]
+
+-- | 型の演算子
+typeOp :: Text -> Parser Text
+typeOp n = (lexeme . try) (string n <* notFollowedBy (symbolChar <|> punctuationChar))
+
+-- | 型の演算子の優先順位テーブル
+typeOperatorTable :: [[Operator Parser Type]]
+typeOperatorTable =
+  [ [InfixR ((\t1 t2 -> TFunction t1 t2 Set.empty) <$ typeOp "->")]
+  ]
+
+-- | 型レベルの式
+typeExpr :: Parser Type
+typeExpr = makeExprParser typeTerm typeOperatorTable
+
 -- | 型
 typeAnnotation :: Parser Type
-typeAnnotation =
-  choice
-    [ TNumber <$ rword "number"
-    , TBool <$ rword "bool"
-    , -- func(type, type)
-      do
-        rword "func"
-        void $ symbol "("
-        t1 <- typeAnnotation
-        void $ symbol ","
-        t2 <- typeAnnotation
-        void $ symbol ")"
-        -- エフェクトは型注釈では省略され、推論される
-        return $ TFunction t1 t2 Set.empty
-    ]
+typeAnnotation = typeExpr
 
 -- | 式
 expr :: Parser Expr
@@ -114,8 +123,8 @@ operatorTable =
     , InfixN (BinOp Lt <$ op "<")
     , InfixN (BinOp Gt <$ op ">")
     ]
-  , [InfixR (Apply <$ op "<-")]
-  , [InfixL (flip Apply <$ op "->")]
+  , [InfixR (Apply <$ op "<|")]
+  , [InfixL (flip Apply <$ op "|>")]
   ]
 
 -- | if式
@@ -134,9 +143,10 @@ lambdaExpr = do
   name <- identifier
   mType <- optional $ do
     void $ symbol ":"
-    typeAnnotation
-  void $ symbol ";"
-  Lambda name mType <$> expr
+    typeTerm
+  void $ symbol "->"
+  body <- expr
+  return $ Lambda name mType body
 
 -- | do構文
 doExpr :: Parser Expr

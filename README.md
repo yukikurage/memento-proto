@@ -16,22 +16,26 @@ Mementoは関数型の特徴を持ち、エフェクトシステムを統合し�
 
 ```
 // 値の束縛
-42 -> x;                   // xに42を束縛
+42 |> x  ->                   // xに42を束縛
 
 // 型注釈
-42 -> x : number;          // 明示的な型注釈
-true -> flag : bool;       // 真偽値型
+42 |> x : number  ->          // 明示的な型注釈
+true |> flag : bool  ->       // 真偽値型
 
 // ラムダ式（無名関数）
-(x; x + 1) -> increment;   // 引数x、本体はx+1
-(n : number; n * 2) -> double; // 型注釈付きラムダ式
+(x -> x + 1) |> increment ->   // 引数x、本体はx+1
+(n : number -> n * 2) |> double  -> // 型注釈付きラムダ式
 
 // 関数適用
-x -> increment;            // incrementにxを適用
-5 -> double -> increment;  // 合成関数（5を倍にしてから1増やす）
+x |> increment  ->            // incrementにxを適用
+5 |> double |> increment  ->  // 合成関数（5を倍にしてから1増やす）
+// または
+increment <| (double <| 5)  ->  // 関数を右から適用することも可能
 
 // 条件分岐
-if (x > 10) then x else 5;
+if (x > 10) then x else 5  ->  // 条件分岐
+
+...
 ```
 
 ### 型システム
@@ -40,19 +44,19 @@ Mementoは以下の型をサポートしています：
 
 - `number`: 数値型
 - `bool`: 真偽値型
-- 関数型: `T1 -> T2`（T1からT2への関数）
+- 関数型: `(T1 -> T2)`（T1からT2への関数）
 
 型注釈は省略可能で、多くの場合型推論が働きます：
 
 ```
 // 型注釈あり
-42 -> x : number;
+42 |> x : number ->
 
 // 型注釈なし（numberと推論される）
-10 -> y;
+10 |> y ->
 
 // 関数の型も推論される
-(n; n * 2) -> double;  // number -> number と推論
+(n -> n * 2) |> double : (number -> number) ->
 ```
 
 ### エフェクトシステム
@@ -60,15 +64,16 @@ Mementoは以下の型をサポートしています：
 Mementoはエフェクトを追跡・処理する機能を持っています。現在サポートされているエフェクト：
 
 - `ZeroDiv`: ゼロ除算の可能性
+- `Throw`: 例外エフェクト
 
 エフェクトは関数を通じて伝播します：
 
 ```
 // エフェクトを持つ関数
-(a; a / 2) -> halve;   // ZeroDivエフェクトを持つ
+(a -> a / 2) |> halve ->   // ZeroDivエフェクトを持つ
 
 // エフェクトの伝播
-x -> halve;            // halveのエフェクトを引き継ぐ
+x |> halve ->            // halveのエフェクトを引き継ぐ
 ```
 
 ### doオペレーション
@@ -77,7 +82,7 @@ x -> halve;            // halveのエフェクトを引き継ぐ
 
 ```
 // throwエフェクトの発生
-v -> do throw -> x;
+v |> do throw |> x ->
 ```
 
 ## 使用例
@@ -86,50 +91,52 @@ v -> do throw -> x;
 
 ```
 // 変数定義
-42 -> x : number;
-10 -> y : number;
+42 |> x : number ->
+10 |> y : number ->
 
 // 簡単な演算
-x + y;        // 52
-x * y;        // 420
+x + y |> result ->        // 52
+x * y |> result ->        // 420
 ```
 
 ### 関数定義と適用
 
 ```
 // 関数定義
-(n : number; n + 1) -> increment;
-(n : number; n * 2) -> double;
+(n : number -> n + 1) |> increment ->
+(n : number -> n * 2) |> double ->
 
 // 関数適用
-5 -> increment;        // 6
-5 -> double;           // 10
+5 |> increment ->        // 6
+5 |> double ->           // 10
 
 // 関数合成
-5 -> double -> increment;  // 11
+5 |> double |> increment ->  // 11
+// または 
+increment <| (double <| 5) ->  // 11
 ```
 
 ### 条件分岐
 
 ```
 // 条件式
-if (x > y) then x else y;
+if (x > y) then x else y |> result ->
 
 // 条件分岐を含む関数
-(val; if (val > 10) then (val + 10) else (val - 5)) -> conditional;
+(val -> if (val > 10) then (val + 10) else (val - 5)) |> conditional ->
 ```
 
 ### エフェクト処理
 
 ```
 // エフェクトを持つ関数
-(x;
-  0 -> do throw -> x;
+(x ->
+  0 |> do throw |> x
   9999
-) -> f;
+) |> f ->
 
 // エフェクトを発生させる
-0 -> f;
+0 |> f ->
 ```
 
 ## ビルドと実行

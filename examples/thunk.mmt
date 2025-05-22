@@ -1,7 +1,7 @@
-// 単純な数値と演算
-42 -> x : number;
-x + 10 -> result;
+// thunkの例（遅延評価）
+(x -> 
+  if (x == 0) then 42 else (1000 / x)
+) |> safeDiv ->
 
-// ラムダ式と適用
-(n : number; n * 2) -> double;
-x -> double 
+// 0で評価してもエラーにならない
+0 |> safeDiv 
