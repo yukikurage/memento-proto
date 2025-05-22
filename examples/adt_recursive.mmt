@@ -1,0 +1,19 @@
+// examples/adt_recursive.mmt
+
+data NumList [
+  Nil : NumList,
+  Cons : number -> NumList -> NumList // Recursive
+];
+
+val my_list : NumList := Cons 10 (Cons 20 Nil);
+
+// Function to sum elements in NumList
+val sum_list : (NumList -> number) :=
+  branch NumList [
+    (Nil) -> 0,
+    (Cons head tail) -> head + sum_list tail
+  ];
+
+val total : number := sum_list my_list; // Expected: 30
+
+val main : number := total;

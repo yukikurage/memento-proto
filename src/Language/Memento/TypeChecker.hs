@@ -7,12 +7,13 @@ module Language.Memento.TypeChecker (
 )
 where
 
-import Control.Monad (forM, unless, when)
+import Control.Monad (forM, unless, when, foldM)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.State (State, evalState, gets, modify) -- Added evalState
+import Control.Monad.State (State, evalState, gets, modify)
+import Data.List (foldr, zip) -- Added zip
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust) -- Added fromJust
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -23,34 +24,64 @@ import Language.Memento.Syntax (
   Effect (..),
   Effects,
   Expr (..),
+  Match (..), -- Added Match
+  Clause (..), -- Added Clause
+  Pattern (..), -- Added Pattern
+  PConstructor (..), -- Added PConstructor
+  PVar (..), -- Added PVar
+  PWildcard (..), -- Added PWildcard
   Program (..),
   Type (..),
-  TypeError (..), -- Make sure CustomErrorType is included by previous step
+  TAlgebraicData (..),
+  ConstructorDef (..), 
+  DataDef (..),
+  AdtInfo (..), -- Added AdtInfo
+  ConstructorSignature (..), -- Added ConstructorSignature
+  TypeError (..),
  )
+
+-- | Signature of a data constructor
+data ConstructorSignature = ConstructorSignature
+  { csArgTypes :: [Type] -- Argument types
+  , csResultType :: Type -- Result ADT type
+  }
+  deriving (Show, Eq)
+
+-- | Information about a declared Algebraic Data Type (ADT)
+data AdtInfo = AdtInfo
+  { adtName :: Text -- Name of the ADT
+  , adtConstructors :: Map Text ConstructorSignature -- Constructors (name -> signature)
+  }
+  deriving (Show, Eq)
 
 -- | Type checking monad: Error handling + State (for environment)
 type TypeCheck a = ExceptT TypeError (State TypeState) a
 
-{- | Type checking state: primarily the type environment.
-tsEffects is not used for global accumulation across definitions in typeCheckProgram.
-It's used by inferType locally if needed, but inferType now returns effects directly.
--}
+-- | Type checking state
 data TypeState = TypeState
-  { tsEnv :: Map Text Type -- Type environment for variables (local and top-level)
-  -- tsEffects :: Effects -- This was used for accumulating effects globally, now handled differently
+  { tsEnv :: Map Text Type -- Type environment for variables and constructors
+  , tsAdtEnv :: Map Text AdtInfo -- Environment for ADT definitions
   }
 
 -- | Initial state for type checking
 initialState :: TypeState
-initialState = TypeState{tsEnv = Map.empty}
+initialState = TypeState{tsEnv = Map.empty, tsAdtEnv = Map.empty}
 
--- | Get the current type environment
+-- | Get the current type environment for variables and constructors
 getEnv :: TypeCheck (Map Text Type)
 getEnv = gets tsEnv
 
--- | Add a binding to the type environment
+-- | Add a binding to the variable/constructor type environment
 addBinding :: Text -> Type -> TypeCheck ()
 addBinding name typ = modify $ \st -> st{tsEnv = Map.insert name typ (tsEnv st)}
+
+-- | Add an ADT definition to the ADT environment
+addAdtInfo :: Text -> AdtInfo -> TypeCheck ()
+addAdtInfo name adtInfo = modify $ \st -> st{tsAdtEnv = Map.insert name adtInfo (tsAdtEnv st)}
+
+-- | Get the current ADT environment
+getAdtEnv :: TypeCheck (Map Text AdtInfo)
+getAdtEnv = gets tsAdtEnv
 
 -- | Run a computation in a temporarily extended environment
 withBinding :: Text -> Type -> TypeCheck a -> TypeCheck a
@@ -60,6 +91,33 @@ withBinding name typ action = do
   result <- action
   modify $ \st -> st{tsEnv = oldEnv} -- Restore original environment
   return result
+
+-- | Run a computation in an environment temporarily extended with multiple bindings
+withBindings :: [(Text, Type)] -> TypeCheck a -> TypeCheck a
+withBindings bindings action = do
+  oldEnv <- getEnv
+  mapM_ (uncurry addBinding) bindings
+  result <- action
+  modify $ \st -> st{tsEnv = oldEnv} -- Restore original environment
+  return result
+
+-- | Resolve a type to ensure it refers to known ADTs or primitive types.
+-- currentAdtName is for allowing recursive definitions.
+resolveType :: Type -> Maybe Text -> TypeCheck ()
+resolveType typ currentAdtName = do
+  adtEnv <- getAdtEnv
+  case typ of
+    TNumber -> return ()
+    TBool -> return ()
+    TFunction argT retT _ -> do
+      resolveType argT currentAdtName
+      resolveType retT currentAdtName
+    TAlgebraicData name -> do
+      let isCurrent = Just name == currentAdtName
+      unless (isCurrent || Map.member name adtEnv) $
+        throwError $ CustomErrorType $ "Undefined algebraic data type: " <> name
+    -- Potentially other types in the future
+    -- _ -> throwError $ CustomErrorType $ "Type validation not implemented for: " <> T.pack (show typ)
 
 {- | Effect operations mapping (name, (arg_type, return_type, effect_produced))
 This remains useful for the 'Do' expression.
@@ -114,7 +172,7 @@ inferType expr = case expr of
     env <- gets tsEnv
     case Map.lookup name env of
       Nothing -> throwError $ UnboundVariable name
-      Just t -> return (t, Set.empty)
+      Just t -> return (t, Set.empty) -- Constructors are now in tsEnv
   BinOp op e1 e2 -> do
     (t1, eff1) <- inferType e1
     (t2, eff2) <- inferType e2
@@ -123,7 +181,7 @@ inferType expr = case expr of
       Add -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
       Sub -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
       Mul -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
-      Div -> unify TNumber t1 >> unify TNumber t2 >> return TNumber -- Potential ZeroDiv effect not handled here yet
+      Div -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
       Eq -> unify t1 t2 >> return TBool
       Lt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
       Gt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
@@ -136,13 +194,8 @@ inferType expr = case expr of
     unify thenType elseType
     return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
   Lambda name mType body -> do
-    -- For `mType`: If Nothing, we previously defaulted to TNumber.
-    -- The plan suggests: `let actualParamType = fromMaybe TNumber mType`
-    -- Or throw `CannotInferType expr`. Let's stick to `fromMaybe TNumber mType` for now.
     let actualParamType = fromMaybe TNumber mType
     (bodyType, bodyEffects) <- withBinding name actualParamType $ inferType body
-    -- The effects of the lambda expression itself are empty.
-    -- The body's effects are part of the function type.
     return (TFunction actualParamType bodyType bodyEffects, Set.empty)
   Apply func arg -> do
     (funcType, funcEffs) <- inferType func
@@ -151,51 +204,183 @@ inferType expr = case expr of
     case funcType of
       TFunction paramT retT funBodyEffs -> do
         unify paramT argType
-        -- When a function is applied, its declared effects (funBodyEffs) are incurred.
         return (retT, accumulatedEffects `Set.union` funBodyEffs)
       _ -> throwError $ TypeMismatch (TFunction argType (error "Cannot construct expected type for error reporting easily") Set.empty) funcType
   Do name -> do
     case lookupEffectOp name of
       Just (argT, retT, effect) ->
-        -- The 'Do' expression itself has no effects when evaluated to a function,
-        -- the effect is part of the function type it represents.
         return (TFunction argT retT (Set.singleton effect), Set.empty)
       Nothing -> throwError $ UndefinedEffect name
+  -- Match expression type checking will be handled in a subsequent task.
+  -- For now, if it's encountered, it might fall through or cause an error if not handled by inferType.
+  -- Let's add a placeholder for Match to avoid compilation errors if it's part of Expr.
+  Match scrutinee clauses -> do
+    -- Infer scrutinee type
+    (scrutineeType, scrutineeEffects) <- inferType scrutinee
+    adtEnv <- getAdtEnv
 
-{- | Type check a whole program (a list of definitions).
-Returns a map of definition names to their types if successful.
--}
+    -- Check if scrutinee is TAlgebraicData
+    adtActualName <- case scrutineeType of
+      TAlgebraicData name -> return name
+      _ -> throwError $ TypeMismatch (TAlgebraicData "ADT" []) scrutineeType -- Placeholder for expected type
+
+    -- Retrieve AdtInfo
+    adtInfo <- case Map.lookup adtActualName adtEnv of
+      Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> adtActualName
+      Just info -> return info
+    let adtConstructorsMap = adtConstructors adtInfo
+
+    -- Check for empty clauses
+    when (null clauses) $
+      throwError $ CustomErrorType "Match expression cannot have empty clauses"
+
+    -- Process clauses
+    let processClause (firstBranchTypeOpt, accClauseEffects) (Clause pattern branchExpr) = do
+          localBindings <- case pattern of
+            PConstructor patConsName varNames -> do
+              constructorSig <- case Map.lookup patConsName adtConstructorsMap of
+                Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not part of ADT '" <> adtActualName <> "'"
+                Just sig -> return sig
+              unless (length varNames == length (csArgTypes constructorSig)) $
+                throwError $ CustomErrorType $ "Pattern arity mismatch for constructor '" <> patConsName <> "'. Expected " <> T.pack (show (length (csArgTypes constructorSig))) <> " args, got " <> T.pack (show (length varNames))
+              return $ zip varNames (csArgTypes constructorSig)
+            PVar varName -> return [(varName, scrutineeType)]
+            PWildcard -> return []
+
+          (currentBranchExprType, currentBranchExprEffects) <- withBindings localBindings $ inferType branchExpr
+          
+          newFirstBranchTypeOpt <- case firstBranchTypeOpt of
+            Nothing -> return $ Just currentBranchExprType
+            Just firstBranchType -> do
+              unify firstBranchType currentBranchExprType
+              return $ Just firstBranchType
+          
+          return (newFirstBranchTypeOpt, Set.union accClauseEffects currentBranchExprEffects)
+
+    (finalBranchTypeOpt, totalClauseEffects) <- foldM processClause (Nothing, Set.empty) clauses
+    
+    finalMatchExprType <- case finalBranchTypeOpt of
+        Nothing -> throwError $ CustomErrorType "Could not determine type of match expression (should be caught by empty clauses check)" -- Should not happen if clauses not empty
+        Just t -> return t
+
+    -- Exhaustiveness Check
+    let (coveredConstructors, hasWildcardOrVar) = foldr 
+          (\(Clause p _) (accSet, accBool) -> case p of
+            PConstructor cn _ -> (Set.insert cn accSet, accBool)
+            PVar _          -> (accSet, True)
+            PWildcard       -> (accSet, True)
+          ) (Set.empty, False) clauses
+
+    unless hasWildcardOrVar $ do
+      let allAdtConstructors = Map.keysSet adtConstructorsMap
+      when (not (allAdtConstructors `Set.isSubsetOf` coveredConstructors)) $
+        throwError $ CustomErrorType $ "Pattern matching is not exhaustive for ADT '" <> adtActualName <> "'. Missing: " <> T.pack (show (Set.difference allAdtConstructors coveredConstructors))
+
+    return (finalMatchExprType, Set.union scrutineeEffects totalClauseEffects)
+
+  _ -> throwError $ CustomErrorType $ "Type checking not implemented for this expression: " <> T.pack (show expr)
+
+
+-- | Helper to build the functional type of a constructor
+buildConstructorType :: [Type] -> Type -> Type
+buildConstructorType argTypes resultType = foldr (\arg acc -> TFunction arg acc Set.empty) resultType argTypes
+
+-- | Register ADTs and their constructors
+registerAdtsAndConstructors :: [Definition] -> TypeCheck ()
+registerAdtsAndConstructors definitions = do
+  let dataDefs = [def | def@(DataDef _ _) <- definitions]
+
+  -- Phase 1: Collect ADT names, check for duplicates, and pre-populate tsAdtEnv.
+  currentAdtEnv <- getAdtEnv
+  foldM_ (preRegisterAdtName currentAdtEnv) () dataDefs
+
+  -- Phase 2: Process constructors for each ADT.
+  mapM_ processAdtDefinition dataDefs
+
+  where
+    preRegisterAdtName :: Map Text AdtInfo -> () -> Definition -> TypeCheck ()
+    preRegisterAdtName initialAdtEnv _ (DataDef adtName _) = do
+      when (Map.member adtName initialAdtEnv) $ -- Check against env before this batch started
+        throwError $ CustomErrorType $ "Duplicate ADT definition: " <> adtName
+      
+      -- Check if already pre-registered in this current batch (in case of duplicate DataDef in input list)
+      currentBatchAdtEnv <- getAdtEnv
+      when (Map.member adtName currentBatchAdtEnv && not (Map.member adtName initialAdtEnv)) $
+         throwError $ CustomErrorType $ "Duplicate ADT definition in current batch: " <> adtName
+      
+      addAdtInfo adtName (AdtInfo adtName Map.empty) -- Placeholder for recursive resolution
+    preRegisterAdtName _ _ _ = return () -- Should not be called with ValDef
+
+    processAdtDefinition :: Definition -> TypeCheck ()
+    processAdtDefinition (DataDef adtName consDefs) = do
+      -- Build constructor signatures and add them to tsEnv
+      finalConstructorMap <- foldM (buildAndRegisterConstructor adtName) Map.empty consDefs
+      -- Update the AdtInfo with the fully processed constructors
+      modify $ \st -> st {tsAdtEnv = Map.adjust (\info -> info {adtConstructors = finalConstructorMap}) adtName (tsAdtEnv st)}
+    processAdtDefinition _ = return () -- Skip ValDefs
+
+    buildAndRegisterConstructor :: Text -> Map Text ConstructorSignature -> ConstructorDef -> TypeCheck (Map Text ConstructorSignature)
+    buildAndRegisterConstructor adtName accumulatedConstructors (ConstructorDef consNameText argTypes) = do
+      -- Check for global name collision in tsEnv (vars, other constructors)
+      env <- getEnv
+      when (Map.member consNameText env) $
+        throwError $ CustomErrorType $ "Constructor name '" <> consNameText <> "' conflicts with an existing definition or another constructor."
+
+      -- Check for local name collision (constructors within the same ADT)
+      when (Map.member consNameText accumulatedConstructors) $
+        throwError $ CustomErrorType $ "Duplicate constructor name '" <> consNameText <> "' in ADT '" <> adtName <> "'"
+
+      -- Resolve argument types (ADT name is visible in tsAdtEnv due to Phase 1)
+      mapM_ (\argT -> resolveType argT (Just adtName)) argTypes
+
+      let resultType = TAlgebraicData adtName
+      let constructorSig = ConstructorSignature argTypes resultType
+      let functionalType = buildConstructorType argTypes resultType
+
+      -- Add constructor's functional type to global value environment (tsEnv)
+      addBinding consNameText functionalType
+      
+      return $ Map.insert consNameText constructorSig accumulatedConstructors
+
+-- | Type check a whole program
 typeCheckProgram :: Program -> Either TypeError (Map.Map Text Type)
 typeCheckProgram (Program definitions) = evalState (runExceptT go) initialState
- where
-  go :: TypeCheck (Map.Map Text Type) -- TypeCheck is ExceptT TypeError (State TypeState)
-  go = do
-    -- Pass 1: Populate environment with declared types of all definitions for mutual recursion.
-    let declaredTypesEnv = Map.fromList $ map (\(ValDef name typ _) -> (name, typ)) definitions
-    modify $ \st -> st{tsEnv = declaredTypesEnv}
+  where
+    go :: TypeCheck (Map.Map Text Type)
+    go = do
+      -- Pass 1: Register ADTs and their constructors
+      registerAdtsAndConstructors definitions
 
-    -- Pass 2: Type check each definition's body.
-    checkedDefsData <- forM definitions $ \(ValDef name declType exprBody) -> do
-      -- Infer the type and effects of the expression body.
-      -- The environment (tsEnv) already contains all top-level declarations from Pass 1.
-      (inferredBodyType, inferredBodyEffects) <- inferType exprBody
+      -- Pass 2: Populate environment with declared types of ValDefs for mutual recursion.
+      -- And type check ValDef bodies.
+      -- We need to separate collecting ValDef types and checking them,
+      -- because a ValDef might use an ADT constructor whose type was just registered.
+      
+      -- Collect ValDef types first
+      valDefTypes <- foldM collectValDefTypes Map.empty definitions
+      
+      -- Add ValDef types to the environment, which already contains constructor types
+      currentEnv <- getEnv
+      let combinedEnv = Map.union currentEnv valDefTypes -- valDefTypes will overwrite if names clash, but constructors should be unique
+      modify $ \st -> st {tsEnv = combinedEnv}
 
-      -- Check 1: The inferred type of the body must match the declared type.
-      -- 型の検証（エフェクトのサブタイピングも考慮）
-      unify declType inferredBodyType
+      -- Check ValDef bodies
+      checkedValDefsData <- foldM checkValDefBody [] definitions
+      
+      return $ Map.fromList checkedValDefsData
 
-      -- Check 2: トップレベルではエフェクトは許可されません
-      unless (Set.null inferredBodyEffects) $
-        throwError $
-          CustomErrorType $
-            T.pack $
-              "In definition '"
-                <> T.unpack name
-                <> "': effects are not allowed for top-level definitions"
-                <> " but got "
-                <> show inferredBodyEffects
+    collectValDefTypes :: Map Text Type -> Definition -> TypeCheck (Map Text Type)
+    collectValDefTypes acc def = case def of
+      ValDef name typ _ -> return $ Map.insert name typ acc
+      _ -> return acc
 
-      -- If both checks pass, return the name with its declared type.
-      return (name, declType)
-
-    return $ Map.fromList checkedDefsData
+    checkValDefBody :: [(Text, Type)] -> Definition -> TypeCheck [(Text, Type)]
+    checkValDefBody acc def = case def of
+      ValDef name declType exprBody -> do
+        (inferredBodyType, inferredBodyEffects) <- inferType exprBody
+        unify declType inferredBodyType
+        unless (Set.null inferredBodyEffects) $
+          throwError $ CustomErrorType $
+            "In definition '" <> name <> "': effects are not allowed for top-level definitions but got " <> T.pack (show inferredBodyEffects)
+        return $ (name, declType) : acc
+      _ -> return acc

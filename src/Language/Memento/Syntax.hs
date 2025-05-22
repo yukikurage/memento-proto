@@ -23,6 +23,9 @@ data Effect
   | Throw -- 例外エフェクト
   deriving (Show, Eq, Ord, Generic)
 
+-- | コンストラクタ定義
+data ConstructorDef = ConstructorDef Text [Type] deriving (Show, Eq, Generic)
+
 -- エフェクトのセット型
 type Effects = Set Effect
 
@@ -31,6 +34,7 @@ data Type
   = TNumber -- 数値型
   | TBool -- 真偽値型
   | TFunction Type Type Effects -- 関数型 (引数の型 -> 戻り値の型 & エフェクト)
+  | TAlgebraicData Text -- 代数的データ型
   deriving (Show, Eq, Generic)
 
 -- | 式の型
@@ -56,9 +60,21 @@ data BinOp
   | Gt -- 大なり
   deriving (Show, Eq, Generic)
 
+-- | パターンの定義
+data Pattern
+  = PConstructor Text [Text] -- コンストラクタパターン (コンストラクタ名, 変数名のリスト)
+  | PVar Text -- 変数パターン (変数名)
+  | PWildcard -- ワイルドカードパターン (_)
+  deriving (Show, Eq, Generic)
+
+-- | match式の節の定義
+data Clause = Clause Pattern Expr -- パターン, 式
+  deriving (Show, Eq, Generic)
+
 -- | 値定義の型
 data Definition
   = ValDef Text Type Expr -- 変数名, 型, 式
+  | DataDef Text [ConstructorDef] -- データ型名, コンストラクタ定義のリスト
   deriving (Show, Eq, Generic)
 
 -- | プログラムの型 (トップレベル定義のリスト)
