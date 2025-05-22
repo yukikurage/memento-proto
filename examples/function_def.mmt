@@ -1,0 +1,5 @@
+val doubler : (number -> number with <>) = (input -> input * 2);
+val forty_two : number with <> = (doubler <| 21);
+
+val throwing_func : (number -> number with <Throw>) = (x -> (op throw) <| x);
+val result_throw : number with <Throw> = (throwing_func <| 123);
