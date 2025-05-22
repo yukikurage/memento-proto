@@ -1,0 +1,49 @@
+name:                memento-proto
+version:             0.1.0.0
+github:              "yukikurage/memento-proto"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2024 Author name here"
+
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+description:         Please see the README on GitHub at <https://github.com/yukikurage/memento-proto#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- megaparsec
+- parser-combinators
+- text
+- mtl
+- containers
+- aeson
+- directory
+- filepath
+
+library:
+  source-dirs: src
+
+executables:
+  memento-proto:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - memento-proto
+
+tests:
+  memento-proto-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - memento-proto 
