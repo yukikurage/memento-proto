@@ -10,6 +10,7 @@ import GHC.Generics (Generic)
 -- | エフェクトの定義
 data Effect
   = ZeroDiv -- ゼロ除算エフェクト
+  | Throw -- 例外エフェクト
   deriving (Show, Eq, Ord, Generic)
 
 -- エフェクトのセット型
@@ -49,5 +50,6 @@ data BinOp
 data TypeError
   = TypeMismatch Type Type -- 期待する型と実際の型が異なる
   | UnboundVariable Text -- 未定義の変数
-  | CannotInferType Expr -- 型を推論できない
+  | CannotInferType Expr -- 型を推論できな
+  | UndefinedEffect Text -- 未定義のエフェクト
   deriving (Show, Eq)

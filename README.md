@@ -77,10 +77,7 @@ x -> halve;            // halveのエフェクトを引き継ぐ
 
 ```
 // throwエフェクトの発生
-do throw;
-
-// 条件によるエフェクト
-if (x <= 0) then do throw else x;
+v -> do throw -> x;
 ```
 
 ## 使用例
@@ -126,13 +123,13 @@ if (x > y) then x else y;
 
 ```
 // エフェクトを持つ関数
-(a; a / 2) -> halve;
+(x;
+  0 -> do throw -> x;
+  9999
+) -> f;
 
-// エフェクトの伝播
-x -> halve;
-
-// doによるエフェクト
-do throw -> errorVal;
+// エフェクトを発生させる
+0 -> f;
 ```
 
 ## ビルドと実行

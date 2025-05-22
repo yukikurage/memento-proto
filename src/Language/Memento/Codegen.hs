@@ -107,7 +107,7 @@ generateExpr = \case
           ]
   -- do演算 - エフェクトを表現
   Do name ->
-    T.concat ["[\"op\", \"", name, "\", null, (v) => ret(v)]"]
+    T.concat ["ret((v) => [\"op\", \"", name, "\", v, (v) => ret(v)])"]
 
 -- | 二項演算子の生成
 generateBinOp :: BinOp -> Text

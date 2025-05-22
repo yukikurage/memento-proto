@@ -10,6 +10,7 @@ import Control.Monad (when)
 import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.Map as Map
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -22,6 +23,14 @@ data TypeState = TypeState
   }
 
 type TypeCheck a = ExceptT TypeError (State TypeState) a
+
+-- エフェクト操作のマッピング (名前, 引数の型, 戻り値の型, エフェクト)
+effectOps :: [(Text, (Type, Type, Effect))]
+effectOps = [("throw", (TNumber, TNumber, Throw))]
+
+-- エフェクト操作を名前で検索
+lookupEffectOp :: Text -> Maybe (Type, Type, Effect)
+lookupEffectOp name = lookup name effectOps
 
 -- | 初期状態
 initialState :: TypeState
@@ -108,10 +117,8 @@ inferType expr = case expr of
         unify TNumber t2
         return TNumber
       Div -> do
-        -- 割り算の場合はZeroDivエフェクトを追加
         unify TNumber t1
         unify TNumber t2
-        addEffect ZeroDiv
         return TNumber
       Eq -> do
         unify t1 t2
@@ -189,3 +196,10 @@ inferType expr = case expr of
 
         return returnType
       _ -> throwError $ TypeMismatch (TFunction argType TNumber Set.empty) funcType
+  Do name -> do
+    -- デフォルトの型とエフェクト
+    case lookupEffectOp name of
+      Just (argType, retType, effect) -> do
+        -- 関数型を返す
+        return $ TFunction argType retType (Set.singleton effect)
+      Nothing -> throwError $ UndefinedEffect name
