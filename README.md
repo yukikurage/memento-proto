@@ -1,90 +1,156 @@
-# Memento言語プロトタイプ
+# Memento プログラミング言語
 
-Mementoは、型安全な関数型プログラミング言語のプロトタイプです。シンプルな構文と型推論を備え、JavaScriptにコンパイルされます。
+Mementoは関数型の特徴を持ち、エフェクトシステムを統合した実験的プログラミング言語です。
 
 ## 特徴
 
-- 静的型付け（`number`型と`bool`型）
-- 型注釈の省略可能（型推論）
-- ラムダ式による関数定義
-- パイプライン演算子（`->`）による関数適用
-- JavaScriptへのコンパイル
+- **関数型パラダイム**: すべてが式であり、ラムダ計算に基づく
+- **型システム**: オプショナルな型注釈と型推論をサポート
+- **エフェクトシステム**: 副作用を追跡・処理する機能
+- **パイプライン演算子**: データフローを直感的に表現
+- **Thunk-based評価**: 遅延評価によるエフェクト処理
 
-## 必要なもの
+## 言語仕様
 
-- [Stack](https://docs.haskellstack.org/en/stable/)（Haskellビルドツール）
-- [Node.js](https://nodejs.org/)（コンパイル結果の実行用）
+### 基本構文
 
-## インストール
+```
+// 値の束縛
+42 -> x;                   // xに42を束縛
 
-```bash
-git clone https://github.com/yukikurage/memento-proto.git
-cd memento-proto
-stack build
+// 型注釈
+42 -> x : number;          // 明示的な型注釈
+true -> flag : bool;       // 真偽値型
+
+// ラムダ式（無名関数）
+(x; x + 1) -> increment;   // 引数x、本体はx+1
+(n : number; n * 2) -> double; // 型注釈付きラムダ式
+
+// 関数適用
+x -> increment;            // incrementにxを適用
+5 -> double -> increment;  // 合成関数（5を倍にしてから1増やす）
+
+// 条件分岐
+if (x > 10) then x else 5;
 ```
 
-## 使い方
+### 型システム
 
-### ビルドスクリプト
+Mementoは以下の型をサポートしています：
 
-```bash
-# コンパイラーのビルド
-./build.sh build
+- `number`: 数値型
+- `bool`: 真偽値型
+- 関数型: `T1 -> T2`（T1からT2への関数）
 
-# .mmtファイルをコンパイル
-./build.sh compile examples/inference.mmt
-
-# すべての例をコンパイル
-./build.sh all
-
-# コンパイル済みのJavaScriptを実行
-./build.sh run examples/inference.mmt
-
-# ビルド・コンパイル・実行を連続して行う
-./build.sh examples/inference.mmt
-
-# 出力ディレクトリをクリア
-./build.sh clean
-```
-
-## 構文例
-
-### 変数定義
+型注釈は省略可能で、多くの場合型推論が働きます：
 
 ```
 // 型注釈あり
 42 -> x : number;
 
-// 型推論（numberと推論される）
+// 型注釈なし（numberと推論される）
 10 -> y;
+
+// 関数の型も推論される
+(n; n * 2) -> double;  // number -> number と推論
 ```
 
-### ラムダ式（関数）定義
+### エフェクトシステム
+
+Mementoはエフェクトを追跡・処理する機能を持っています。現在サポートされているエフェクト：
+
+- `ZeroDiv`: ゼロ除算の可能性
+
+エフェクトは関数を通じて伝播します：
 
 ```
-// 型注釈あり
-(x : number; x + 1) -> increment;
+// エフェクトを持つ関数
+(a; a / 2) -> halve;   // ZeroDivエフェクトを持つ
 
-// 型推論（numberを引数に取る関数と推論される）
-(n; n * 2) -> double;
+// エフェクトの伝播
+x -> halve;            // halveのエフェクトを引き継ぐ
 ```
 
-### 関数適用
+### doオペレーション
+
+`do`キーワードを使って特定のエフェクトを発生させることができます：
 
 ```
-// パイプライン演算子による適用
-5 -> increment;
+// throwエフェクトの発生
+do throw;
 
-// 複数の関数を連結
-5 -> increment -> double;
+// 条件によるエフェクト
+if (x <= 0) then do throw else x;
+```
+
+## 使用例
+
+### 基本的な値と演算
+
+```
+// 変数定義
+42 -> x : number;
+10 -> y : number;
+
+// 簡単な演算
+x + y;        // 52
+x * y;        // 420
+```
+
+### 関数定義と適用
+
+```
+// 関数定義
+(n : number; n + 1) -> increment;
+(n : number; n * 2) -> double;
+
+// 関数適用
+5 -> increment;        // 6
+5 -> double;           // 10
+
+// 関数合成
+5 -> double -> increment;  // 11
 ```
 
 ### 条件分岐
 
 ```
-if (x < 10) then (x + 1) else (x * 2)
+// 条件式
+if (x > y) then x else y;
+
+// 条件分岐を含む関数
+(val; if (val > 10) then (val + 10) else (val - 5)) -> conditional;
 ```
 
-## 出力
+### エフェクト処理
 
-コンパイルされたJavaScriptファイルは`dist/js`ディレクトリに出力されます。
+```
+// エフェクトを持つ関数
+(a; a / 2) -> halve;
+
+// エフェクトの伝播
+x -> halve;
+
+// doによるエフェクト
+do throw -> errorVal;
+```
+
+## ビルドと実行
+
+```bash
+# コンパイラのビルド
+./build.sh build
+
+# ファイルのコンパイル
+./build.sh compile examples/thunk.mmt
+
+# コンパイル＆実行
+./build.sh examples/thunk.mmt
+```
+
+## 今後の開発予定
+
+- より豊富なデータ型（リスト、タプル、レコードなど）
+- カスタムエフェクトの定義
+- より強力な型システム（多相型、代数的データ型）
+- ライブラリシステム
