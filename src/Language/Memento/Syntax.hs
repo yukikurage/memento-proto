@@ -9,6 +9,9 @@ module Language.Memento.Syntax (
   Definition (..), -- Added Definition
   Program (..), -- Added Program
   TypeError (..),
+  Pattern (..), -- Added Pattern
+  Clause (..), -- Added Clause
+  ConstructorDef (..), -- Added ConstructorDef
 )
 where
 
@@ -24,7 +27,7 @@ data Effect
   deriving (Show, Eq, Ord, Generic)
 
 -- | コンストラクタ定義
-data ConstructorDef = ConstructorDef Text [Type] deriving (Show, Eq, Generic)
+data ConstructorDef = ConstructorDef Text Type deriving (Show, Eq, Generic)
 
 -- エフェクトのセット型
 type Effects = Set Effect
@@ -47,6 +50,7 @@ data Expr
   | Lambda Text (Maybe Type) Expr -- ラムダ式 (変数名, 型注釈(省略可), 本体)
   | Apply Expr Expr -- 関数適用
   | Do Text -- do name 構文
+  | Match Text [Clause] -- match式 (scrutinee, clauses)
   deriving (Show, Eq, Generic)
 
 -- | 二項演算子の型

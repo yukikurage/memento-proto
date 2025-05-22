@@ -7,7 +7,7 @@ data MaybeNum [
 ];
 
 // Create an instance of Some
-val present_num : MaybeNum := Some 10;
+val present_num : MaybeNum := 10 |> Some;
 
 // Create an instance of None
 val absent_num : MaybeNum := None;
@@ -20,10 +20,10 @@ val get_num_or_default : (MaybeNum -> number) :=
   ];
 
 // Test with Some
-val test_some : number := get_num_or_default (Some 42); // Expected: 42
+val test_some : number := 42 |> Some |> get_num_or_default; // Expected: 42
 
 // Test with None
-val test_none : number := get_num_or_default (None);    // Expected: 0
+val test_none : number := None |> get_num_or_default;    // Expected: 0
 
 // Simple main to ensure it can be processed (though execution isn't the primary test here)
-val main : number := test_some;
+val main : number -> number := x -> test_some;

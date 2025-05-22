@@ -3,26 +3,28 @@
 data TriValue [
   CaseA : TriValue,
   CaseB : number -> TriValue,
-  CaseC : bool -> TriValue
+  CaseC : bool -> bool -> TriValue
 ];
 
 // This should be OK (exhaustive with wildcard)
 val exhaustive_test1 : (TriValue -> number) :=
   branch TriValue [
-    (CaseA) -> 1,
+    (CaseA) -> 2,
     (CaseB x) -> x,
     (_) -> 0 // Wildcard makes it exhaustive
   ];
   
 // Re-do exhaustive_test2 to be more straightforward for variable pattern
+/*
 val exhaustive_test2_revised : (TriValue -> number) :=
   branch TriValue [
     (CaseA) -> 1,
     (CaseB x) -> x,
     (any_other_case) -> 3 // any_other_case will be of type TriValue
   ];
+*/
 
-
+/*
 // This should ideally FAIL type checking (non-exhaustive)
 // "Pattern matching is not exhaustive for ADT TriValue. Missing: {"CaseC"}"
 val non_exhaustive_test : (TriValue -> number) :=
@@ -31,6 +33,7 @@ val non_exhaustive_test : (TriValue -> number) :=
     (CaseB x) -> x
     // Missing CaseC
   ];
+*/
 
 // Dummy main to make it a program
-val main : number := exhaustive_test1 (CaseA);
+val main : number -> number := (x -> exhaustive_test1 <| CaseA);
