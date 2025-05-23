@@ -6,7 +6,7 @@ module Language.Memento.Codegen where
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Memento.Syntax (BinOp (..), Clause (..), ConstructorDef (..), Definition (..), Expr (..), Pattern (..), Program (..), Type (..)) -- Updated imports
+import Language.Memento.Syntax (BinOp (..), Clause (..), ConstructorDef (..), Definition (..), Expr (..), HandlerClause (..), Pattern (..), Program (..), Type (..)) -- Updated imports
 
 baseDefinitions :: Text
 baseDefinitions =
@@ -47,9 +47,9 @@ generateJS (Program definitions) =
     , "\n\n// Generated ADT Constructor functions\n"
     , generateConstructorWrapperFunctions definitions
     , "\n\n// Generated Value definitions\n"
-    -- EffectDef and DataDef (other than their constructor wrappers) do not produce direct top-level JS definitions here.
-    -- ValDefs are assumed to be computations that result in a value after global handling.
-    , T.intercalate "\n\n" (map generateDefinition (filter isValDef definitions))
+    , -- EffectDef and DataDef (other than their constructor wrappers) do not produce direct top-level JS definitions here.
+      -- ValDefs are assumed to be computations that result in a value after global handling.
+      T.intercalate "\n\n" (map generateDefinition (filter isValDef definitions))
     , finalExecutionBlock
     ]
  where
@@ -77,7 +77,7 @@ generateJS (Program definitions) =
 getConstructorArity_cg :: Type -> Int
 getConstructorArity_cg typ =
   case typ of
-    TFunction _argType resType _effects -> 1 + getConstructorArity_cg resType
+    TFunction argType (retType, _) -> 1 + getConstructorArity_cg retType
     _ -> 0
 
 generateConstructorWrapperFunctions :: [Definition] -> Text
@@ -107,11 +107,11 @@ generateSingleConstructorWrapper (ConstructorDef consName consTypeSyntax) =
         , consName
         , " = "
         , T.concat (map (\argName -> T.pack "(" `T.append` argName `T.append` T.pack ") => ") argNames)
-        , "[\""
+        , "ret([\""
         , consName
         , "\"" -- Closing quote for constructor name string literal
         , jsPayload -- Will be empty or like ", arg1, arg2"
-        , "];"
+        , "]);"
         ]
 
 {- | 式のJavaScriptコードの生成
@@ -154,6 +154,16 @@ generateExpr = \case
           , "  return " <> bodyExpr <> ";"
           , "})"
           ]
+  HandleApply handler arg ->
+    let handlerExpr = generateExpr handler
+        argExpr = generateExpr arg
+     in T.unlines
+          [ "bind("
+          , handlerExpr
+          , ", (h) => h("
+          , argExpr
+          , "))"
+          ]
   -- [Apply f x] = bind([x], (v) => bind([f], (f) => f(v)))
   Apply func arg ->
     let funcExpr = generateExpr func
@@ -169,10 +179,10 @@ generateExpr = \case
   Do name ->
     T.concat ["ret((v) => [\"op\", \"", name, "\", v, (v) => ret(v)])"]
   -- Match expression
-  Match adtName clauses ->
+  Match adtType clauses ->
     let matchArg = "_matched_val_" -- Name for the JS function argument
-        generatedClauses = map (generateClause matchArg adtName) clauses
-        fallbackLogic = T.concat [T.pack "console.error('Non-exhaustive patterns for ", adtName, T.pack " with value:', ", T.pack matchArg, T.pack "); ", T.pack "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value for ", adtName, T.pack "');"]
+        generatedClauses = map (generateClause matchArg) clauses
+        fallbackLogic = T.concat [T.pack "console.error('Non-exhaustive patterns for ", T.pack (show adtType), T.pack " with value:', ", T.pack matchArg, T.pack "); ", T.pack "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value for ", T.pack (show adtType), T.pack "');"]
      in T.unlines
           [ T.pack "ret((" <> T.pack matchArg <> T.pack ") => {"
           , T.pack "  let _result;"
@@ -195,9 +205,8 @@ generateExpr = \case
           , T.pack "  return _result;"
           , T.pack "})"
           ]
-  Handle handledExpr _effectsToHandle handlerClauses -> -- _effectsToHandle is not used in codegen
-    let handledExprJs = generateExpr handledExpr
-        (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
+  Handle _ handlerClauses ->
+    let (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
 
         -- Generate JS for the return clause (assuming exactly one for simplicity here, TypeChecker ensures at least one)
         -- If multiple return clauses were possible and meaningful, logic would need to select/merge.
@@ -212,30 +221,34 @@ generateExpr = \case
           _ -> "// Should be caught by type checker: No return clause found\n    return [\"op\", \"error\", \"No return clause\", (v) => ret(v)];" -- Fallback, should not happen
 
         -- Generate JS for operator clauses as a switch or if-else-if chain
-        opClausesJs = if null opClauses
-          then T.pack "      // No operator clauses\n"
-          else T.concat $ map (\(HandlerClause opName argVar contVar bodyExpr) ->
-            let bodyJs = generateExpr bodyExpr
-            in T.unlines
-                [ "      if (_op_name_ === \"" <> opName <> "\") {"
-                , "        const " <> argVar <> " = _op_arg_;"
-                , "        const " <> contVar <> " = (_val_for_k_) => _op_cont_(_val_for_k_);"
-                , "        return " <> bodyJs <> ";"
-                , "      }"
-                ]
-          ) opClauses
-        
+        opClausesJs =
+          if null opClauses
+            then T.pack "      // No operator clauses\n"
+            else
+              T.concat $
+                map
+                  ( \(HandlerClause opName argVar contVar bodyExpr) ->
+                      let bodyJs = generateExpr bodyExpr
+                       in T.unlines
+                            [ "      if (_op_name_ === \"" <> opName <> "\") {"
+                            , "        const " <> argVar <> " = _op_arg_;"
+                            , "        const " <> contVar <> " = _op_cont_;"
+                            , "        return " <> bodyJs <> ";"
+                            , "      }"
+                            ]
+                  )
+                  opClauses
+
         -- Default case for operations not handled by specific clauses
         defaultOpCaseJs = "      else {\n        return [\"op\", _op_name_, _op_arg_, _op_cont_]; // Re-perform unhandled op\n      }"
-
      in T.unlines
-          [ "bind(" <> handledExprJs <> ", (_handled_val_) => {"
+          [ "ret(function _handle_(_handled_val_){"
           , "  if (_handled_val_[0] === \"ret\") {"
           , returnClauseJs
           , "  } else { // Operation"
           , "    const _op_name_ = _handled_val_[1];"
           , "    const _op_arg_ = _handled_val_[2];"
-          , "    const _op_cont_ = _handled_val_[3];"
+          , "    const _op_cont_ = (v) => _handle_(_handled_val_[3](v));"
           , opClausesJs
           , defaultOpCaseJs
           , "  }"
@@ -246,15 +259,14 @@ generateExpr = \case
 -- This is a simple version; a more robust one might be in Syntax or a Util module.
 partitionHandlerClauses :: [HandlerClause] -> ([HandlerClause], [HandlerClause])
 partitionHandlerClauses clauses = go clauses ([], [])
-  where
-    go [] acc = acc
-    go (c:cs) (ops, rets) = case c of
-      HandlerClause{} -> go cs (ops ++ [c], rets)
-      HandlerReturnClause{} -> go cs (ops, rets ++ [c])
+ where
+  go [] acc = acc
+  go (c : cs) (ops, rets) = case c of
+    HandlerClause{} -> go cs (ops ++ [c], rets)
+    HandlerReturnClause{} -> go cs (ops, rets ++ [c])
 
-
-generateClause :: String -> Text -> Clause -> (Text, Text, Text) -- (condition, bindingsJs, branchJs)
-generateClause matchArgName _adtName (Clause pattern branchExpr) =
+generateClause :: String -> Clause -> (Text, Text, Text) -- (condition, bindingsJs, branchJs)
+generateClause matchArgName (Clause pattern branchExpr) =
   -- _adtName is not used here
   let (condition, bindings) = generatePattern (T.pack matchArgName) pattern
       bindingsJs = generateBindings bindings

@@ -4,98 +4,46 @@ data Either [
 ];
 
 effect Trans [
-  NumBool : number -> bool,
-  BoolNum : bool -> number
+  NumBool : number -> bool with <Trans>,
+  BoolNum : bool -> number with <Trans>
 ];
 
 effect ThrowE [
-  DoThrow : number -> number // Represents an operation that might throw
+  ThrowE : number -> number with <ThrowE> // Represents an operation that might throw
 ];
 
 // c_func: Takes a number, applies NumBool, then BoolNum if true, else returns 100.
 // Effects: <Trans>
-val c_func : (number -> number with <Trans>) := input_n -> (
-  (do NumBool) input_n |> x_nb -> // x_nb is bool
-  if (x_nb) then (
-    (do BoolNum) true // true is the argument to BoolNum
+val c_func : (number -> number with <Trans, ThrowE>) := input_n -> (
+  input_n |> (do NumBool) |> x_nb
+  -> if (x_nb) then (
+    true |> (do BoolNum)
   ) else (
-    100 // This path returns a number directly
+    100 |> (do ThrowE)
   )
 );
+
+
+val handle_trans : (number with <Trans> => number) := (
+  handle : (number with <Trans> => number) [
+    (n |> NumBool |> k) -> ( (n > 0) |> k ),
+    (b |> BoolNum |> k) -> ( (if (b) then (1) else (0)) |> k ),
+    (x) -> x
+  ]
+);
+
+val handle_throw_e : (number with <ThrowE> => Either) := (
+  handle : (number with <ThrowE> => Either) [
+    (n |> ThrowE |> k) -> (n |> Left),
+    (x) -> x |> Right
+  ]
+);
+
+val test : number := 10;
 
 // main: Demonstrates handling Trans and ThrowE.
-// It takes an initial_val, passes it to c_func, then handles Trans, then handles ThrowE.
-val main : number -> Either := initial_val ->
-  handle <ThrowE> ( // Outer handler for ThrowE
-    handle <Trans> ( (c_func) initial_val ) [ // Inner handler for Trans
-      // Clause for NumBool operation from Trans effect
-      (NumBool n to k) -> ( (n > 0) |> k ), // k is continuation: bool -> number with <Trans> (from c_func's body) or number (if handled)
-
-      // Clause for BoolNum operation from Trans effect
-      (BoolNum b to k) -> ( (if (b) then (1) else (0)) |> k ), // k is continuation: number -> number with <Trans> or number
-
-      // Return clause for the Trans handler: if c_func completes without further Trans ops, its value comes here.
-      val_x_f -> val_x_f // The value from c_func (a number) is passed through.
-                       // Effects of val_x_f are those of c_func minus <Trans>
-    ]
-    // The result of the inner handle is `number with <ThrowE>` (if ThrowE was part of c_func's original effects,
-    // or if k itself introduced ThrowE, which it doesn't here).
-    // For this example, let's assume c_func only has <Trans>. So inner handle result is `number`.
-  ) [
-    // Clause for DoThrow operation from ThrowE effect
-    (DoThrow v to k_g) -> (v |> Left), // If DoThrow occurs, wrap value in Left. k_g is ignored.
-
-    // Return clause for the ThrowE handler
-    val_x_g -> (val_x_g |> Right) // If the computation from inner handler completes, wrap in Right.
-  ];
-
-// Example of a computation that uses ThrowE, to be used by main if desired.
-// For this example, main directly uses c_func.
-// If we wanted main to handle a comp that *also* has ThrowE:
-// val comp_with_throw : number with <Trans, ThrowE> := (
-// (do NumBool) 20 |> res_nb ->
-// if (res_nb) then (
-// (do DoThrow) 99 // Directly use DoThrow
-// ) else (
-// 100
-// )
-// );
-// And main would be: handle <ThrowE> (handle <Trans> (comp_with_throw) [...]) [...]
-// But for now, c_func only has <Trans>.
-// So, DoThrow will only be "handled" if it's part of the expression passed to the <ThrowE> handler.
-// In the current 'main', the expression passed to handle <ThrowE> is the result of handle <Trans>.
-// If c_func doesn't use DoThrow, the DoThrow clause in the outer handler won't be hit.
-
-// To test DoThrow, let's make a version of c_func that can also throw.
-val c_func_can_throw : (number -> number with <Trans, ThrowE>) := input_n -> (
-  (do NumBool) input_n |> x_nb ->
-  if (x_nb) then (
-    if (input_n == 42) then ( // Special condition to throw
-      (do DoThrow) input_n
-    ) else (
-      (do BoolNum) true
-    )
-  ) else (
-    100
-  )
+val main : number -> Either := (
+  tmp 
+  -> test |> input_n
+  -> input_n |> c_func |>> handle_trans |>> handle_throw_e  // == Right 10 
 );
-
-// A main version that uses c_func_can_throw to demonstrate DoThrow being caught.
-val main_with_throw_test : number -> Either := initial_val ->
-  handle <ThrowE> (
-    handle <Trans> ( (c_func_can_throw) initial_val ) [
-      (NumBool n to k) -> ( (n > 0) |> k ),
-      (BoolNum b to k) -> ( (if (b) then (1) else (0)) |> k ),
-      val_x_f -> val_x_f
-    ]
-  ) [
-    (DoThrow v to k_g) -> ( (v + 1000) |> Left ), // Modify value before Left
-    val_x_g -> (val_x_g |> Right)
-  ];
-// Expected for main_with_throw_test(42): Left(1042)
-// Expected for main_with_throw_test(10): Right(1)  (10 -> NumBool -> true; k(true); BoolNum true -> 1; k(1); val_x_f -> 1; val_x_g -> Right(1))
-// Expected for main_with_throw_test(-5): Right(100) (-5 -> NumBool -> false; k(false); val_x_f -> 100; val_x_g -> Right(100))
-
-// Another example to ensure BoolNum path of c_func works with the first main
-// main(10) should be Right(1)
-// main(-5) should be Right(100)

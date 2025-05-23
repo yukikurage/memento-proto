@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Memento.TypeChecker (
   typeCheck, -- For individual expressions
@@ -7,28 +8,27 @@ module Language.Memento.TypeChecker (
 )
 where
 
-import Control.Monad (foldM, foldM_, forM, unless, when)
+import Control.Monad (foldM, foldM_, forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify)
-import Data.List (foldr, zip) -- Added zip
+import Data.List (foldr, partition, zip) -- Added zip
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (fromJust, fromMaybe) -- Added fromJust
+import Data.Maybe (fromJust, fromMaybe, isNothing) -- Added fromJust
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Language.Memento.Syntax (
   BinOp (..),
-  -- Includes Match
-  -- Includes PConstructor, PVar, PWildcard
   Clause (..),
-  -- Includes TAlgebraicData
   ConstructorDef (..),
   Definition (..),
   Effect (..),
   Effects,
   Expr (..),
+  HandlerClause (HandlerClause, HandlerReturnClause),
+  OperatorDef (OperatorDef),
   Pattern (..),
   Program (..),
   Type (..),
@@ -37,7 +37,7 @@ import Language.Memento.Syntax (
 
 -- | Signature of a data constructor
 data ConstructorSignature = ConstructorSignature
-  { csArgTypes :: [Type] -- Argument types,
+  { csArgType :: Type -- Argument types,
   , csResultType :: Type -- Result ADT type
   }
   deriving (Show, Eq)
@@ -57,6 +57,7 @@ data TypeState = TypeState
   { tsEnv :: Map Text Type -- Type environment for variables and constructors
   , tsAdtEnv :: Map Text AdtInfo -- Environment for ADT definitions
   , tsEffectEnv :: Map Text EffectInfo -- Environment for Effect definitions
+  , tsOperatorEnv :: Map Text OperatorSignature -- Environment for Operator definitions
   }
 
 -- | Signature of an effect operator
@@ -76,7 +77,7 @@ data EffectInfo = EffectInfo
 
 -- | Initial state for type checking
 initialState :: TypeState
-initialState = TypeState{tsEnv = Map.empty, tsAdtEnv = Map.empty, tsEffectEnv = Map.empty}
+initialState = TypeState{tsEnv = Map.empty, tsAdtEnv = Map.empty, tsEffectEnv = Map.empty, tsOperatorEnv = Map.empty}
 
 -- | Get the current type environment for variables and constructors
 getEnv :: TypeCheck (Map Text Type)
@@ -102,6 +103,14 @@ getEffectEnv = gets tsEffectEnv
 addEffectInfo :: Text -> EffectInfo -> TypeCheck ()
 addEffectInfo name effectInfo = modify $ \st -> st{tsEffectEnv = Map.insert name effectInfo (tsEffectEnv st)}
 
+-- | Get the current operator environment
+getOperatorEnv :: TypeCheck (Map Text OperatorSignature)
+getOperatorEnv = gets tsOperatorEnv
+
+-- | Add an operator definition to the operator environment
+addOperatorInfo :: Text -> OperatorSignature -> TypeCheck ()
+addOperatorInfo name operatorInfo = modify $ \st -> st{tsOperatorEnv = Map.insert name operatorInfo (tsOperatorEnv st)}
+
 -- | Run a computation in a temporarily extended environment
 withBinding :: Text -> Type -> TypeCheck a -> TypeCheck a
 withBinding name typ action = do
@@ -123,15 +132,37 @@ withBindings bindings action = do
 {- | Resolve a type to ensure it refers to known ADTs or primitive types.
 currentAdtName is for allowing recursive definitions.
 -}
-resolveType :: Type -> Maybe Text -> TypeCheck ()
-resolveType typ currentAdtName = do
+resolveType :: Type -> Maybe Text -> Maybe Text -> TypeCheck ()
+resolveType typ currentAdtName currentEffectName = do
   adtEnv <- getAdtEnv
+  effectEnv <- getEffectEnv
   case typ of
     TNumber -> return ()
     TBool -> return ()
-    TFunction argT retT _ -> do
-      resolveType argT currentAdtName
-      resolveType retT currentAdtName
+    THandler (argT, consumedEffects) (retT, generatedEffects) -> do
+      forM_ consumedEffects $ \(Effect effect) -> do
+        let isCurrent = Just effect == currentEffectName
+        unless (isCurrent || Map.member effect effectEnv) $
+          throwError $
+            CustomErrorType $
+              "Undefined effect referenced in function type: " <> T.pack (show effect)
+      forM_ generatedEffects $ \(Effect effect) -> do
+        let isCurrent = Just effect == currentEffectName
+        unless (isCurrent || Map.member effect effectEnv) $
+          throwError $
+            CustomErrorType $
+              "Undefined effect referenced in function type: " <> T.pack (show generatedEffects)
+      resolveType argT currentAdtName currentEffectName
+      resolveType retT currentAdtName currentEffectName
+    TFunction argT (retT, generatedEffects) -> do
+      forM_ generatedEffects $ \(Effect effect) -> do
+        let isCurrent = Just effect == currentEffectName
+        unless (isCurrent || Map.member effect effectEnv) $
+          throwError $
+            CustomErrorType $
+              "Undefined effect referenced in function type: " <> T.pack (show generatedEffects)
+      resolveType argT currentAdtName currentEffectName
+      resolveType retT currentAdtName currentEffectName
     TAlgebraicData name -> do
       let isCurrent = Just name == currentAdtName
       unless (isCurrent || Map.member name adtEnv) $
@@ -142,16 +173,6 @@ resolveType typ currentAdtName = do
 -- Potentially other types in the future
 -- _ -> throwError $ CustomErrorType $ "Type validation not implemented for: " <> T.pack (show typ)
 
-{- | Effect operations mapping (name, (arg_type, return_type, effect_produced))
-This remains useful for the 'Do' expression.
--}
-effectOps :: [(Text, (Type, Type, Effect))]
-effectOps = [("throw", (TNumber, TNumber, Throw))] -- Example, can be expanded
-
--- | Lookup an effect operation by its name
-lookupEffectOp :: Text -> Maybe (Type, Type, Effect)
-lookupEffectOp name = lookup name effectOps
-
 {- | エフェクトのサブタイピングをチェック
    S1 ⊂ S2 のとき S1 サブタイプ S2
 -}
@@ -161,16 +182,27 @@ isSubEffects e1 e2 = e1 `Set.isSubsetOf` e2
 {- | Unify two types. Throws TypeMismatch if they are not equal.
    関数型の場合は引数と戻り値の型を再帰的に照合し、エフェクトについてはサブタイピングを適用する
    エフェクトのサブタイピング: S1 ⊂ S2 のとき T with S1 は T with S2 に代入可能
+   (左辺) : 実際に宣言された型など、代入先の型
+   (右辺) : 推論された型など
 -}
 unify :: Type -> Type -> TypeCheck ()
-unify (TFunction argT1 retT1 eff1) (TFunction argT2 retT2 eff2) = do
+unify (THandler (argT1, eff1) (retT1, eff2)) (THandler (argT2, eff3) (retT2, eff4)) = do
   -- 引数の型と戻り値の型は通常通り単一化する
   unify argT1 argT2
   unify retT1 retT2
 
-  -- エフェクトのサブタイピング: eff1 ⊆ eff2 であれば OK
   -- 実際の型のエフェクトが期待される型のサブセットであれば互換性あり
-  unless (eff1 `isSubEffects` eff2) $
+  unless (eff4 `isSubEffects` eff2) $
+    throwError $
+      EffectMismatch eff4 eff2
+
+  unless (eff1 `isSubEffects` eff3) $
+    throwError $
+      EffectMismatch eff1 eff3
+unify (TFunction argT1 (retT1, eff1)) (TFunction argT2 (retT2, eff2)) = do
+  unify argT1 argT2
+  unify retT1 retT2
+  unless (eff2 `isSubEffects` eff1) $
     throwError $
       EffectMismatch eff1 eff2
 unify expected actual =
@@ -216,23 +248,42 @@ inferType expr = case expr of
     (elseType, elseEff) <- inferType el
     unify thenType elseType
     return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
+  Apply (Lambda name mType body) arg -> do
+    -- Argument type should be "arg"
+    (argType, argEffs) <- inferType arg
+    (bodyType, bodyEffects) <- withBinding name argType $ inferType body
+    unless (isNothing mType || mType == Just argType) $
+      throwError $
+        CustomErrorType $
+          "Type mismatch in lambda application: " <> T.pack (show mType) <> " <> " <> T.pack (show argType)
+    return (bodyType, bodyEffects `Set.union` argEffs)
   Lambda name mType body -> do
     let actualParamType = fromMaybe TNumber mType
     (bodyType, bodyEffects) <- withBinding name actualParamType $ inferType body
-    return (TFunction actualParamType bodyType bodyEffects, Set.empty)
+    return (TFunction actualParamType (bodyType, bodyEffects), Set.empty)
+  HandleApply func arg -> do
+    (funcType, funcEffs) <- inferType func
+    (argType, argEffs) <- inferType arg
+    let accumulatedEffects = funcEffs `Set.union` argEffs
+    case funcType of
+      THandler (paramT, consumedEffects) (retT, generatedEffects) -> do
+        unify paramT argType
+        return (retT, (accumulatedEffects `Set.difference` consumedEffects) `Set.union` generatedEffects)
+      _ -> throwError $ TypeMismatch funcType (THandler (argType, Set.empty) (TNumber, Set.empty)) -- Expected a function type but got something else
   Apply func arg -> do
     (funcType, funcEffs) <- inferType func
     (argType, argEffs) <- inferType arg
     let accumulatedEffects = funcEffs `Set.union` argEffs
     case funcType of
-      TFunction paramT retT funBodyEffs -> do
+      TFunction paramT (retT, generatedEffects) -> do
         unify paramT argType
-        return (retT, accumulatedEffects `Set.union` funBodyEffs)
-      _ -> throwError $ TypeMismatch (TFunction argType (error "Cannot construct expected type for error reporting easily") Set.empty) funcType
+        return (retT, accumulatedEffects `Set.union` generatedEffects)
+      _ -> throwError $ TypeMismatch funcType (TFunction argType (TNumber, Set.empty)) -- Expected a function type but got something else
   Do name -> do
-    case lookupEffectOp name of
-      Just (argT, retT, effect) ->
-        return (TFunction argT retT (Set.singleton effect), Set.empty)
+    opEnv <- getOperatorEnv
+    case Map.lookup name opEnv of
+      Just (OperatorSignature{osArgType = paramT, osRetType = retT, osEffectName = effectName}) -> do
+        return (TFunction paramT (retT, Set.singleton (Effect effectName)), Set.empty)
       Nothing -> throwError $ UndefinedEffect name
   -- Match expression type checking will be handled in a subsequent task.
   -- For now, if it's encountered, it might fall through or cause an error if not handled by inferType.
@@ -240,9 +291,13 @@ inferType expr = case expr of
   Match scrutinee clauses -> do
     adtEnv <- getAdtEnv
 
+    scrutineeName <- case scrutinee of
+      TAlgebraicData name -> return name
+      _ -> throwError $ CustomErrorType "Scrutinee must be an algebraic data type"
+
     -- Retrieve AdtInfo
-    adtInfo <- case Map.lookup scrutinee adtEnv of
-      Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> scrutinee
+    adtInfo <- case Map.lookup scrutineeName adtEnv of
+      Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> scrutineeName
       Just info -> return info
     let adtConstructorsMap = adtConstructors adtInfo
 
@@ -257,14 +312,14 @@ inferType expr = case expr of
           localBindings <- case pattern of
             PConstructor patConsName varNames -> do
               constructorSig <- case Map.lookup patConsName adtConstructorsMap of
-                Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not part of ADT '" <> scrutinee <> "'"
+                Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not part of ADT '" <> scrutineeName <> "'"
                 Just sig -> return sig
-              unless (length varNames == length (csArgTypes constructorSig)) $
+              unless (length varNames == 1) $
                 throwError $
                   CustomErrorType $
-                    "Pattern arity mismatch for constructor '" <> patConsName <> "'. Expected " <> T.pack (show (length (csArgTypes constructorSig))) <> " args, got " <> T.pack (show (length varNames))
-              return $ zip varNames (csArgTypes constructorSig)
-            PVar varName -> return [(varName, TAlgebraicData scrutinee)]
+                    "Pattern arity mismatch for constructor '" <> patConsName <> "'. Expected 1 arg, got " <> T.pack (show (length varNames))
+              return $ zip varNames [csArgType constructorSig]
+            PVar varName -> return [(varName, scrutinee)]
             PWildcard -> return []
 
           (currentBranchExprType, currentBranchExprEffects) <- withBindings localBindings $ inferType branchExpr
@@ -299,107 +354,112 @@ inferType expr = case expr of
       unless (allAdtConstructors `Set.isSubsetOf` coveredConstructors) $
         throwError $
           CustomErrorType $
-            "Pattern matching is not exhaustive for ADT '" <> scrutinee <> "'. Missing: " <> T.pack (show (Set.difference allAdtConstructors coveredConstructors))
+            "Pattern matching is not exhaustive for ADT '" <> scrutineeName <> "'. Missing: " <> T.pack (show (Set.difference allAdtConstructors coveredConstructors))
 
-    return (TFunction (TAlgebraicData scrutinee) finalMatchExprType totalClauseEffects, Set.empty)
-  Handle handledExpr effectsToHandle handlerClauses -> do
-    (exprType, exprEffects) <- inferType handledExpr
+    return (TFunction scrutinee (finalMatchExprType, totalClauseEffects), Set.empty)
+  Handle handlerType handlerClauses -> do
     effectEnv <- getEffectEnv
 
-    let effectNamesToHandle = Set.map (\(Effect name) -> name) effectsToHandle
+    ((argType, argEffects), (retType, retEffects)) <- extractHandlerType handlerType
+
+    let effectNamesToHandle = Set.map (\(Effect name) -> name) argEffects
+
     operatorSigsMap :: Map Text OperatorSignature <- foldM (collectOpSigs effectEnv) Map.empty effectNamesToHandle
-    let clausesReturnEffects = exprEffects `Set.difference` effectsToHandle
 
     -- Separate clauses
     let (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
-    
+
     when (null returnClauses) $
-      throwError $ CustomErrorType "Handle expression must have at least one return clause."
+      throwError $
+        CustomErrorType "Handle expression must have at least one return clause."
 
     -- Determine targetBodyType from return clauses
-    (targetBodyType, returnClausesEffects) <- processReturnClauses exprType returnClauses clausesReturnEffects
+    (targetBodyType, returnClausesEffects) <- processReturnClauses argType returnClauses
 
     -- Process operator clauses
-    opClausesCombinedEffects <- processOpClauses operatorSigsMap opClauses targetBodyType clausesReturnEffects
+    opClausesCombinedEffects <- processOpClauses operatorSigsMap opClauses targetBodyType returnClausesEffects
 
     -- Exhaustiveness Check
-    let handledOperatorsInClauses = Set.fromList [opName | (HandlerClause opName _ _ _) <- opClauses]
+    -- with No Confilct!
+    handledOperatorsInClauses <-
+      foldM
+        ( \acc (HandlerClause opName _ _ _) -> do
+            when (Set.member opName acc) $
+              throwError $
+                CustomErrorType $
+                  "Duplicate operator '" <> opName <> "' in handle clauses."
+            case Map.lookup opName operatorSigsMap of
+              Just _ -> return $ Set.insert opName acc
+              Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects."
+        )
+        Set.empty
+        opClauses
+
     let allOperatorsInHandledEffects = Map.keysSet operatorSigsMap
     unless (allOperatorsInHandledEffects `Set.isSubsetOf` handledOperatorsInClauses) $
-      throwError $ CustomErrorType $
-        "Handle expression is not exhaustive. Missing handlers for operators: " <>
-        T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
+      throwError $
+        CustomErrorType $
+          "Handle expression is not exhaustive. Missing handlers for operators: "
+            <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
 
-    let finalEffects = clausesReturnEffects `Set.union` returnClausesEffects `Set.union` opClausesCombinedEffects
-    return (targetBodyType, finalEffects)
+    return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
 
 partitionHandlerClauses :: [HandlerClause] -> ([HandlerClause], [HandlerClause])
 partitionHandlerClauses = Data.List.partition isOpClause
-  where
-    isOpClause HandlerClause{} = True
-    isOpClause _ = False
+ where
+  isOpClause HandlerClause{} = True
+  isOpClause _ = False
 
-processReturnClauses :: Type -> [HandlerClause] -> Effects -> TypeCheck (Type, Effects)
-processReturnClauses _ [] _ = throwError $ CustomErrorType "Internal error: processReturnClauses called with empty list."
-processReturnClauses exprType clauses clausesReturnEffects = do
-    typedBodies <- forM clauses $ \(HandlerReturnClause retVarName bodyExpr) ->
-        withBinding retVarName exprType $ inferType bodyExpr
+processReturnClauses :: Type -> [HandlerClause] -> TypeCheck (Type, Effects)
+processReturnClauses exprType [HandlerReturnClause retVarName bodyExpr] = withBinding retVarName exprType $ inferType bodyExpr
+processReturnClauses _ _ = throwError $ CustomErrorType "Internal error: processReturnClauses called with more than one return clause."
 
-    -- Unify all return clause body types
-    let firstBodyType = fst (head typedBodies)
-    mapM_ (\(bodyT, _) -> unify firstBodyType bodyT) (tail typedBodies)
-    
-    -- Check effects for all return clauses
-    totalEffects <- foldM (\accEffects (bodyT, bodyEffs) -> do
-        unless (bodyEffs `isSubEffects` clausesReturnEffects) $
-            throwError $ EffectMismatch bodyEffs clausesReturnEffects
-        return (accEffects `Set.union` bodyEffs)
-        ) Set.empty typedBodies
-        
-    return (firstBodyType, totalEffects)
+processOpClauses :: Map Text OperatorSignature -> [HandlerClause] -> Type -> Effects -> TypeCheck ()
+processOpClauses _ [] _ _ = return ()
+processOpClauses operatorSigsMap clauses targetBodyType targetBodyEffects = do
+  forM_ clauses $ \(HandlerClause opName argVarName contVarName bodyExpr) -> do
+    opSig <- case Map.lookup opName operatorSigsMap of
+      Just sig -> return sig
+      Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects."
 
-processOpClauses :: Map Text OperatorSignature -> [HandlerClause] -> Type -> Effects -> TypeCheck Effects
-processOpClauses _ [] _ _ = return Set.empty -- No op clauses, no additional effects from them
-processOpClauses operatorSigsMap clauses targetBodyType clausesReturnEffects = do
-    totalEffects <- foldM (\accEffects (HandlerClause opName argVarName contVarName bodyExpr) -> do
-        opSig <- case Map.lookup opName operatorSigsMap of
-            Just sig -> return sig
-            Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects."
+    let contType = TFunction (osRetType opSig) (targetBodyType, targetBodyEffects)
+    (currentOpClauseBodyType, currentOpClauseBodyEffects) <-
+      withBindings [(argVarName, osArgType opSig), (contVarName, contType)] $ inferType bodyExpr
 
-        let contType = TFunction (osRetType opSig) targetBodyType clausesReturnEffects
-        (currentOpClauseBodyType, currentOpClauseBodyEffects) <-
-            withBindings [(argVarName, osArgType opSig), (contVarName, contType)] $ inferType bodyExpr
-
-        unify targetBodyType currentOpClauseBodyType
-        unless (currentOpClauseBodyEffects `isSubEffects` clausesReturnEffects) $
-            throwError $ EffectMismatch currentOpClauseBodyEffects clausesReturnEffects
-        
-        return (accEffects `Set.union` currentOpClauseBodyEffects)
-        ) Set.empty clauses
-    return totalEffects
-
+    unify targetBodyType currentOpClauseBodyType
+    unless (currentOpClauseBodyEffects `isSubEffects` targetBodyEffects) $
+      throwError $
+        EffectMismatch currentOpClauseBodyEffects targetBodyEffects
 
 collectOpSigs :: Map Text EffectInfo -> Map Text OperatorSignature -> Text -> TypeCheck (Map Text OperatorSignature)
 collectOpSigs effectEnv accSigs effectName = do
-    effectInfo <- case Map.lookup effectName effectEnv of
-        Just ei -> return ei
-        Nothing -> throwError $ CustomErrorType $ "Undefined effect referenced in handle: " <> effectName
-    let currentEffectOps = eiOps effectInfo
-    sequence_ [ throwError $ CustomErrorType $ "Duplicate operator name '" <> opN <> "' found across handled effects."
-              | opN <- Map.keys currentEffectOps, Map.member opN accSigs ]
-    return $ Map.union accSigs currentEffectOps
+  effectInfo <- case Map.lookup effectName effectEnv of
+    Just ei -> return ei
+    Nothing -> throwError $ CustomErrorType $ "Undefined effect referenced in handle: " <> effectName
+  let currentEffectOps = eiOps effectInfo
+  sequence_
+    [ throwError $ CustomErrorType $ "Duplicate operator name '" <> opN <> "' found across handled effects."
+    | opN <- Map.keys currentEffectOps
+    , Map.member opN accSigs
+    ]
+  return $ Map.union accSigs currentEffectOps
 
 -- | Helper to build the functional type of a constructor
-buildConstructorType :: [Type] -> Type -> Type
-buildConstructorType argTypes resultType = foldr (\arg acc -> TFunction arg acc Set.empty) resultType argTypes
+buildConstructorType :: Type -> Type -> Type
+buildConstructorType argType resultType = TFunction argType (resultType, Set.empty)
 
 {- | 逆に Type から引数の型の列と結果の型を取り出す
 | 結果の型が分解不可能になるまで繰り返す
 -}
-extractConstructorType :: Type -> ([Type], Type)
+extractConstructorType :: Type -> TypeCheck (Type, (Type, Effects))
 extractConstructorType typ = case typ of
-  TFunction argT retT _ -> let (argTypes, resultType) = extractConstructorType retT in (argT : argTypes, resultType)
-  _ -> ([], typ)
+  TFunction argT (retT, retEffects) -> return (argT, (retT, retEffects))
+  _ -> throwError $ CustomErrorType $ "Expected a function type but got: " <> T.pack (show typ)
+
+extractHandlerType :: Type -> TypeCheck ((Type, Effects), (Type, Effects))
+extractHandlerType typ = case typ of
+  THandler (argT, argEffects) (retT, retEffects) -> return ((argT, argEffects), (retT, retEffects))
+  _ -> throwError $ CustomErrorType $ "Expected a handler type but got: " <> T.pack (show typ)
 
 -- | Register ADTs and their constructors
 registerAdtsAndConstructors :: [Definition] -> TypeCheck ()
@@ -415,8 +475,7 @@ registerAdtsAndConstructors definitions = do
  where
   preRegisterAdtName :: Map Text AdtInfo -> Definition -> TypeCheck ()
   preRegisterAdtName initialAdtEnv (DataDef adtName _) = do
-    when (Map.member adtName initialAdtEnv) $ -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started -- Check against env before this batch started
-    -- Check against env before this batch started
+    when (Map.member adtName initialAdtEnv) $
       throwError $
         CustomErrorType $
           "Duplicate ADT definition: " <> adtName
@@ -442,9 +501,14 @@ registerAdtsAndConstructors definitions = do
     -- Check for global name collision in tsEnv (vars, other constructors)
     env <- getEnv
 
-    let (argTypes, resultType) = extractConstructorType typ
+    (argType, (resultType, resultEffects)) <- extractConstructorType typ
 
-    resolveType resultType (Just adtName)
+    resolveType resultType (Just adtName) Nothing
+
+    unless (Set.null resultEffects) $
+      throwError $
+        CustomErrorType $
+          "Constructor '" <> consNameText <> "' has effects: " <> T.pack (show resultEffects)
 
     when (Map.member consNameText env) $
       throwError $
@@ -458,10 +522,10 @@ registerAdtsAndConstructors definitions = do
           "Duplicate constructor name '" <> consNameText <> "' in ADT '" <> adtName <> "'"
 
     -- Resolve argument types (ADT name is visible in tsAdtEnv due to Phase 1)
-    mapM_ (\argT -> resolveType argT (Just adtName)) argTypes
+    resolveType argType (Just adtName) Nothing
 
-    let constructorSig = ConstructorSignature{csArgTypes = argTypes, csResultType = resultType}
-    let functionalType = buildConstructorType argTypes resultType
+    let constructorSig = ConstructorSignature{csArgType = argType, csResultType = resultType}
+    let functionalType = buildConstructorType argType resultType
 
     -- Add constructor's functional type to global value environment (tsEnv)
     addBinding consNameText functionalType
@@ -478,7 +542,9 @@ registerEffects definitions = do
   processEffectDefinition (EffectDef effectName opDefs) = do
     currentEffectEnv <- getEffectEnv
     when (Map.member effectName currentEffectEnv) $
-      throwError $ CustomErrorType $ "Duplicate effect definition: " <> effectName
+      throwError $
+        CustomErrorType $
+          "Duplicate effect definition: " <> effectName
 
     -- Build operator signatures
     opSigMap <- foldM (buildAndRegisterOperator effectName) Map.empty opDefs
@@ -486,33 +552,26 @@ registerEffects definitions = do
     -- Add EffectInfo to the environment
     addEffectInfo effectName (EffectInfo{eiName = effectName, eiOps = opSigMap})
   processEffectDefinition _ = return () -- Should not be called with other Definition types
-
   buildAndRegisterOperator :: Text -> Map Text OperatorSignature -> OperatorDef -> TypeCheck (Map Text OperatorSignature)
   buildAndRegisterOperator effectName accumulatedOpSigs (OperatorDef opName opType) = do
     -- Resolve opType and ensure it's a function
-    resolveType opType Nothing -- Effects are usually not defined in op signatures themselves
-    (argTypes, retType) <- case opType of
-      TFunction argT' retT' effs -> do
-        -- For now, assuming operator signatures themselves don't declare effects.
-        -- If they could, effs would need to be handled (e.g., ensuring they are part of `effectName`)
-        -- For simplicity, let's assume effs in OperatorDef types should be empty or match the parent effect.
-        -- This example assumes a simple TArg -> TRet form.
-        -- A more robust check might be needed if opType can be arbitrarily complex.
-        -- For now, we extract the first argument and final return type.
-        let (allArgTypes, finalRetType) = extractConstructorType opType
-        unless (length allArgTypes == 1) $ -- Assuming single argument for simplicity based on typical op structure
-          throwError $ CustomErrorType $ "Operator '" <> opName <> "' in effect '" <> effectName <> "' must have a single argument function type."
-        return (head allArgTypes, finalRetType)
-      _ -> throwError $ CustomErrorType $ "Operator type for '" <> opName <> "' in effect '" <> effectName <> "' must be a function type."
+    resolveType opType Nothing (Just effectName)
+    (argType, (finalRetType, finalRetEffects)) <- extractConstructorType opType
 
+    unless (finalRetEffects == Set.singleton (Effect effectName)) $
+      throwError $
+        CustomErrorType $
+          "Operator '" <> opName <> "' in effect '" <> effectName <> "' has effects: " <> T.pack (show finalRetEffects)
 
     when (Map.member opName accumulatedOpSigs) $
-      throwError $ CustomErrorType $ "Duplicate operator name '" <> opName <> "' in effect '" <> effectName <> "'"
+      throwError $
+        CustomErrorType $
+          "Duplicate operator name '" <> opName <> "' in effect '" <> effectName <> "'"
 
-    let opSig = OperatorSignature{osArgType = argTypes, osRetType = retType, osEffectName = effectName}
-    
-    -- Note: Unlike ADT constructors, effect operators are not added to the global tsEnv 
-    -- as directly callable functions. They are invoked via 'do' or handled by 'handle'.
+    let opSig = OperatorSignature{osArgType = argType, osRetType = finalRetType, osEffectName = effectName}
+
+    -- Add operator signature to the environment
+    addOperatorInfo opName opSig
 
     return $ Map.insert opName opSig accumulatedOpSigs
 

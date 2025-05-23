@@ -54,7 +54,7 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch", "effect", "handle", "to"] -- Added "effect", "handle", "to"
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch", "effect", "handle"] -- Added "effect", "handle"
 
 -- | 識別子
 identifier :: Parser Text
@@ -71,9 +71,7 @@ constructorDefinitionParser :: Parser ConstructorDef
 constructorDefinitionParser = lexeme $ do
   name <- identifier
   symbol ":"
-
   typ <- typeExpr
-
   return $ ConstructorDef name typ
 
 {- | エフェクトオペレータ定義のパーサー
@@ -93,7 +91,7 @@ dataDefinitionParser :: Parser Definition
 dataDefinitionParser = lexeme $ do
   rword "data"
   name <- identifier
-  constructors <- brackets (sepBy constructorDefinitionParser (symbol ","))
+  constructors <- brackets (sepEndBy constructorDefinitionParser (symbol ","))
   symbol ";"
   return $ DataDef name constructors
 
@@ -104,7 +102,7 @@ effectDefinitionParser :: Parser Definition
 effectDefinitionParser = lexeme $ do
   rword "effect"
   name <- identifier
-  operators <- brackets (sepBy operatorDefParser (symbol ","))
+  operators <- brackets (sepEndBy operatorDefParser (symbol ","))
   symbol ";"
   return $ EffectDef name operators
 
@@ -125,7 +123,7 @@ patternParser =
       ]
 
 {- | match節のパーサー
-例: ( (Cons x xs) ) -> x
+例: (Cons x xs) -> x
 -}
 clauseParser :: Parser Clause
 clauseParser = lexeme $ do
@@ -135,39 +133,40 @@ clauseParser = lexeme $ do
   return $ Clause pat ex
 
 {- | match式のパーサー
-例: branch myValue [ ( (Some x) ) -> x, ( (None) ) -> 0 ]
+例: branch myValue [ (Some x) -> x, (None) -> 0 ]
 -}
 matchExprParser :: Parser Expr
 matchExprParser = lexeme $ do
   rword "branch"
-  scrutinee <- identifier
+  scrutinee <- typeTerm
   clauses <- brackets (sepBy (try clauseParser) (symbol ",")) -- List of clauses
   return $ Match scrutinee clauses
 
 {- | ハンドラ節のパーサー
 例:
-  (NumBool n to k) -> n > 0 |> k
-  x -> x |> Right
+  (n |> NumBool |> k) -> n > 0 |> k
+  (x) -> x |> Right
 -}
 handlerClauseParser :: Parser HandlerClause
 handlerClauseParser = lexeme $ do
-  rword "("
+  symbol "("
   clause <-
     try
       ( do
-          opName <- identifier
           argVar <- identifier
-          rword "to"
+          symbol "|>"
+          opName <- identifier
+          symbol "|>"
           kVar <- identifier
-          rword ")"
-          rword "->"
+          symbol ")"
+          symbol "->"
           body <- expr
           return $ HandlerClause opName argVar kVar body
       )
       <|> ( do
               retVar <- identifier
-              rword ")"
-              rword "->"
+              symbol ")"
+              symbol "->"
               body <- expr
               return $ HandlerReturnClause retVar body
           )
@@ -185,8 +184,8 @@ effectsParser =
       <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
 
 -- | 型の項 (非関数型、括弧で囲まれた型)
-typeTerm' :: Parser Type
-typeTerm' =
+typeTerm :: Parser Type
+typeTerm =
   choice
     [ try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
@@ -198,33 +197,47 @@ typeTerm' =
 functionTypeSuffixParser :: Type -> Parser Type
 functionTypeSuffixParser argType = do
   symbol "->"
-  retType <- typeExpr -- Changed from typeExpr' to typeExpr for mutual recursion
+  retType <- typeExpr
   effects <- option Set.empty (rword "with" *> effectsParser)
-  return $ TFunction argType retType effects
+  return $ TFunction argType (retType, effects)
+
+handlerTypeSuffixParser :: Type -> Effects -> Parser Type
+handlerTypeSuffixParser argType argEffects = do
+  symbol "=>"
+  retType <- typeExpr
+  effects <- option Set.empty (rword "with" *> effectsParser)
+  return $ THandler (argType, argEffects) (retType, effects)
 
 -- | 型のパーサー (関数型を含む)
 typeExpr :: Parser Type
 typeExpr =
   try
     ( do
-        argType <- typeTerm'
-        functionTypeSuffixParser argType
+        argType <- typeTerm
+        argEffects <- option Set.empty (rword "with" *> effectsParser)
+        handlerTypeSuffixParser argType argEffects
     )
-    <|> typeTerm'
+    <|> try
+      ( do
+          argType <- typeTerm
+          functionTypeSuffixParser argType
+      )
+    <|> typeTerm
 
 -- | 型注釈のパーサー
 typeAnnotation :: Parser Type
 typeAnnotation = typeExpr -- Uses the new typeExpr
 
--- | ハンドル式のパーサー
--- 例: handle <Trans, Throw> c [ (NumBool n to k) -> n > 0 |> k, x -> x |> Right ]
+{- | ハンドル式のパーサー
+例: handle <Trans, Throw> [ (n |> NumBool |> k) -> n > 0 |> k, (x) -> x |> Right ]
+-}
 handlerExprParser :: Parser Expr
 handlerExprParser = lexeme $ do
   rword "handle"
-  effects <- effectsParser
-  body <- expr
+  symbol ":"
+  handlerType <- typeExpr
   clauses <- brackets (sepBy handlerClauseParser (symbol ","))
-  return $ Handle effects body clauses
+  return $ Handle handlerType clauses
 
 -- | 式
 expr :: Parser Expr
@@ -266,6 +279,8 @@ operatorTable =
     ]
   , [InfixR (Apply <$ op "<|")]
   , [InfixL (flip Apply <$ op "|>")]
+  , [InfixR (HandleApply <$ op "<<|")]
+  , [InfixL (flip HandleApply <$ op "|>>")]
   ]
 
 -- | if式
@@ -284,7 +299,7 @@ lambdaExpr = do
   name <- identifier
   mType <- optional $ do
     void $ symbol ":"
-    typeTerm'
+    typeTerm
   void $ symbol "->"
   body <- expr
   return $ Lambda name mType body
