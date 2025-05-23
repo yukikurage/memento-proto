@@ -54,7 +54,7 @@ rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
 
 -- | 予約語のリスト
 reservedWords :: [Text]
-reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch"] -- Added "data", "branch"
+reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", "val", "with", "Throw", "ZeroDiv", "data", "branch", "effect", "handle"] -- Added "effect", "handle"
 
 -- | 識別子
 identifier :: Parser Text
@@ -71,10 +71,18 @@ constructorDefinitionParser :: Parser ConstructorDef
 constructorDefinitionParser = lexeme $ do
   name <- identifier
   symbol ":"
-
   typ <- typeExpr
-
   return $ ConstructorDef name typ
+
+{- | エフェクトオペレータ定義のパーサー
+例: NumBool : number -> bool
+-}
+operatorDefParser :: Parser OperatorDef
+operatorDefParser = lexeme $ do
+  name <- identifier
+  symbol ":"
+  typ <- typeExpr
+  return $ OperatorDef name typ
 
 {- | データ定義のパーサー
 例: data MyList [ Nil, Cons : number -> MyList ];
@@ -83,9 +91,20 @@ dataDefinitionParser :: Parser Definition
 dataDefinitionParser = lexeme $ do
   rword "data"
   name <- identifier
-  constructors <- brackets (sepBy constructorDefinitionParser (symbol ","))
+  constructors <- brackets (sepEndBy constructorDefinitionParser (symbol ","))
   symbol ";"
   return $ DataDef name constructors
+
+{- | エフェクト定義のパーサー
+例: effect Trans [ NumBool : number -> bool, BoolNum : bool -> number ];
+-}
+effectDefinitionParser :: Parser Definition
+effectDefinitionParser = lexeme $ do
+  rword "effect"
+  name <- identifier
+  operators <- brackets (sepEndBy operatorDefParser (symbol ","))
+  symbol ";"
+  return $ EffectDef name operators
 
 -- | パターンパーサー
 patternParser :: Parser Pattern
@@ -104,7 +123,7 @@ patternParser =
       ]
 
 {- | match節のパーサー
-例: ( (Cons x xs) ) -> x
+例: (Cons x xs) -> x
 -}
 clauseParser :: Parser Clause
 clauseParser = lexeme $ do
@@ -114,20 +133,48 @@ clauseParser = lexeme $ do
   return $ Clause pat ex
 
 {- | match式のパーサー
-例: branch myValue [ ( (Some x) ) -> x, ( (None) ) -> 0 ]
+例: branch myValue [ (Some x) -> x, (None) -> 0 ]
 -}
 matchExprParser :: Parser Expr
 matchExprParser = lexeme $ do
   rword "branch"
-  scrutinee <- identifier
+  scrutinee <- typeTerm
   clauses <- brackets (sepBy (try clauseParser) (symbol ",")) -- List of clauses
   return $ Match scrutinee clauses
 
+{- | ハンドラ節のパーサー
+例:
+  (n |> NumBool |> k) -> n > 0 |> k
+  (x) -> x |> Right
+-}
+handlerClauseParser :: Parser HandlerClause
+handlerClauseParser = lexeme $ do
+  symbol "("
+  clause <-
+    try
+      ( do
+          argVar <- identifier
+          symbol "|>"
+          opName <- identifier
+          symbol "|>"
+          kVar <- identifier
+          symbol ")"
+          symbol "->"
+          body <- expr
+          return $ HandlerClause opName argVar kVar body
+      )
+      <|> ( do
+              retVar <- identifier
+              symbol ")"
+              symbol "->"
+              body <- expr
+              return $ HandlerReturnClause retVar body
+          )
+  return clause
+
 -- | エフェクトのパーサー
 effectParser :: Parser Effect
-effectParser =
-  (Throw <$ rword "Throw")
-    <|> (ZeroDiv <$ rword "ZeroDiv")
+effectParser = Effect <$> identifier -- Parses any identifier as an Effect
 
 effectsParser :: Parser Effects
 effectsParser =
@@ -137,8 +184,8 @@ effectsParser =
       <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
 
 -- | 型の項 (非関数型、括弧で囲まれた型)
-typeTerm' :: Parser Type
-typeTerm' =
+typeTerm :: Parser Type
+typeTerm =
   choice
     [ try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
@@ -150,23 +197,47 @@ typeTerm' =
 functionTypeSuffixParser :: Type -> Parser Type
 functionTypeSuffixParser argType = do
   symbol "->"
-  retType <- typeExpr -- Changed from typeExpr' to typeExpr for mutual recursion
+  retType <- typeExpr
   effects <- option Set.empty (rword "with" *> effectsParser)
-  return $ TFunction argType retType effects
+  return $ TFunction argType (retType, effects)
+
+handlerTypeSuffixParser :: Type -> Effects -> Parser Type
+handlerTypeSuffixParser argType argEffects = do
+  symbol "=>"
+  retType <- typeExpr
+  effects <- option Set.empty (rword "with" *> effectsParser)
+  return $ THandler (argType, argEffects) (retType, effects)
 
 -- | 型のパーサー (関数型を含む)
 typeExpr :: Parser Type
 typeExpr =
   try
     ( do
-        argType <- typeTerm'
-        functionTypeSuffixParser argType
+        argType <- typeTerm
+        argEffects <- option Set.empty (rword "with" *> effectsParser)
+        handlerTypeSuffixParser argType argEffects
     )
-    <|> typeTerm'
+    <|> try
+      ( do
+          argType <- typeTerm
+          functionTypeSuffixParser argType
+      )
+    <|> typeTerm
 
 -- | 型注釈のパーサー
 typeAnnotation :: Parser Type
 typeAnnotation = typeExpr -- Uses the new typeExpr
+
+{- | ハンドル式のパーサー
+例: handle <Trans, Throw> [ (n |> NumBool |> k) -> n > 0 |> k, (x) -> x |> Right ]
+-}
+handlerExprParser :: Parser Expr
+handlerExprParser = lexeme $ do
+  rword "handle"
+  symbol ":"
+  handlerType <- typeExpr
+  clauses <- brackets (sepBy handlerClauseParser (symbol ","))
+  return $ Handle handlerType clauses
 
 -- | 式
 expr :: Parser Expr
@@ -180,6 +251,7 @@ term =
     , try lambdaExpr
     , try doExpr
     , try matchExprParser -- Added matchExprParser
+    , try handlerExprParser -- Added handlerExprParser
     , ifExpr
     , Var <$> identifier
     , Number <$> number
@@ -207,6 +279,8 @@ operatorTable =
     ]
   , [InfixR (Apply <$ op "<|")]
   , [InfixL (flip Apply <$ op "|>")]
+  , [InfixR (HandleApply <$ op "<<|")]
+  , [InfixL (flip HandleApply <$ op "|>>")]
   ]
 
 -- | if式
@@ -225,7 +299,7 @@ lambdaExpr = do
   name <- identifier
   mType <- optional $ do
     void $ symbol ":"
-    typeTerm'
+    typeTerm
   void $ symbol "->"
   body <- expr
   return $ Lambda name mType body
@@ -244,6 +318,7 @@ definitionParser =
     choice
       [ try valDefinitionParser
       , try dataDefinitionParser -- Added dataDefinitionParser
+      , try effectDefinitionParser -- Added effectDefinitionParser
       ]
 
 valDefinitionParser :: Parser Definition

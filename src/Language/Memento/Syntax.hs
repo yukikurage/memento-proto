@@ -12,6 +12,8 @@ module Language.Memento.Syntax (
   Pattern (..), -- Added Pattern
   Clause (..), -- Added Clause
   ConstructorDef (..), -- Added ConstructorDef
+  OperatorDef (..), -- Added OperatorDef
+  HandlerClause (..), -- Added HandlerClause
 )
 where
 
@@ -21,13 +23,19 @@ import Data.Text (Text)
 import GHC.Generics (Generic)
 
 -- | エフェクトの定義
-data Effect
-  = ZeroDiv -- ゼロ除算エフェクト
-  | Throw -- 例外エフェクト
-  deriving (Show, Eq, Ord, Generic)
+data Effect = Effect Text deriving (Show, Eq, Ord, Generic) -- Modified to take Text
 
 -- | コンストラクタ定義
 data ConstructorDef = ConstructorDef Text Type deriving (Show, Eq, Generic)
+
+-- | エフェクトオペレータのシグネチャ定義
+data OperatorDef = OperatorDef Text Type deriving (Show, Eq, Generic)
+
+-- | ハンドラ節の定義
+data HandlerClause
+  = HandlerClause Text Text Text Expr -- オペレータ名, 引数変数, 継続変数, 式
+  | HandlerReturnClause Text Expr -- 変数名, 式
+  deriving (Show, Eq, Generic)
 
 -- エフェクトのセット型
 type Effects = Set Effect
@@ -36,7 +44,8 @@ type Effects = Set Effect
 data Type
   = TNumber -- 数値型
   | TBool -- 真偽値型
-  | TFunction Type Type Effects -- 関数型 (引数の型 -> 戻り値の型 & エフェクト)
+  | THandler (Type, Effects) (Type, Effects) -- ハンドラ型 (引数の型 & 消費するエフェクト -> 戻り値の型 & 生成するエフェクト)
+  | TFunction Type (Type, Effects) -- 関数型 (引数の型  -> 戻り値の型 & 生成するエフェクト)
   | TAlgebraicData Text -- 代数的データ型
   deriving (Show, Eq, Generic)
 
@@ -49,8 +58,10 @@ data Expr
   | If Expr Expr Expr -- if式 (condition) then expr else expr
   | Lambda Text (Maybe Type) Expr -- ラムダ式 (変数名, 型注釈(省略可), 本体)
   | Apply Expr Expr -- 関数適用
+  | HandleApply Expr Expr -- ハンドル適用 (ハンドラ, 引数)
   | Do Text -- do name 構文
-  | Match Text [Clause] -- match式 (scrutinee, clauses)
+  | Match Type [Clause] -- match式 (マッチする型, clauses)
+  | Handle Type [HandlerClause] -- ハンドル式 (期待されるハンドラの型 (Function), ハンドラ節)
   deriving (Show, Eq, Generic)
 
 -- | 二項演算子の型
@@ -79,6 +90,7 @@ data Clause = Clause Pattern Expr -- パターン, 式
 data Definition
   = ValDef Text Type Expr -- 変数名, 型, 式
   | DataDef Text [ConstructorDef] -- データ型名, コンストラクタ定義のリスト
+  | EffectDef Text [OperatorDef] -- エフェクト名, オペレータ定義のリスト
   deriving (Show, Eq, Generic)
 
 -- | プログラムの型 (トップレベル定義のリスト)
