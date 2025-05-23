@@ -286,10 +286,13 @@ buildConstructorType argTypes resultType = foldr (\arg acc -> TFunction arg acc 
 {- | 逆に Type から引数の型の列と結果の型を取り出す
 | 結果の型が分解不可能になるまで繰り返す
 -}
-extractConstructorType :: Type -> ([Type], Type)
+extractConstructorType :: Type -> TypeCheck ([Type], Type)
 extractConstructorType typ = case typ of
-  TFunction argT retT _ -> let (argTypes, resultType) = extractConstructorType retT in (argT : argTypes, resultType)
-  _ -> ([], typ)
+  TFunction argT retT effs | effs == Set.empty -> do
+    (argTypes, resultType) <- extractConstructorType retT
+    return (argT : argTypes, resultType)
+  TFunction argT retT effs -> throwError $ CustomErrorType $ "Constructor type has effects: " <> T.pack (show effs)
+  _ -> return ([], typ)
 
 -- | Register ADTs and their constructors
 registerAdtsAndConstructors :: [Definition] -> TypeCheck ()
@@ -332,7 +335,7 @@ registerAdtsAndConstructors definitions = do
     -- Check for global name collision in tsEnv (vars, other constructors)
     env <- getEnv
 
-    let (argTypes, resultType) = extractConstructorType typ
+    (argTypes, resultType) <- extractConstructorType typ
 
     resolveType resultType (Just adtName)
 
