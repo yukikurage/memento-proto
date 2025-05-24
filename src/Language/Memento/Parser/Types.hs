@@ -40,7 +40,7 @@ typeTerm =
 
 -- | タプル型のパーサー
 tupleTypeParser :: Parser Type
-tupleTypeParser = TTuple <$> parens (sepBy typeExpr (symbol ","))
+tupleTypeParser = TTuple <$> brackets (sepBy typeExpr (symbol ","))
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
 functionTypeSuffixParser :: Type -> Parser Type

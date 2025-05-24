@@ -159,7 +159,7 @@ term =
 
 -- | タプル式のパーサー
 tupleExprParser :: Parser Expr
-tupleExprParser = Tuple <$> parens (sepBy expr (symbol ","))
+tupleExprParser = Tuple <$> brackets (sepBy expr (symbol ","))
 
 -- | 式
 expr :: Parser Expr
