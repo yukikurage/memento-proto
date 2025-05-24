@@ -17,6 +17,7 @@ import Data.Text (Text)
 import Language.Memento.Parser.Core (
   Parser,
   brackets,
+  identifier,
   lexeme,
   lowerIdentifier,
   number,
@@ -161,7 +162,7 @@ term =
     , try matchExprParser
     , try handlerExprParser
     , ifExpr
-    , Var <$> lowerIdentifier -- 小文字で始まる識別子
+    , Var <$> identifier
     , Number <$> number
     , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]
