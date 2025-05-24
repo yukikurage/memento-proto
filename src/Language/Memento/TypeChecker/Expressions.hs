@@ -12,7 +12,7 @@ module Language.Memento.TypeChecker.Expressions (
   processOpClauses, -- Exporting as it's used by inferType for Handle
 ) where
 
-import Control.Monad (foldM, unless, when)
+import Control.Monad (foldM, unless, when, zipWithM)
 import Control.Monad.Except (throwError)
 import qualified Data.List as List (partition)
 import qualified Data.Map as Map
@@ -148,46 +148,94 @@ inferType expr = case expr of
         return (TFunction paramT (retT, Set.singleton (Effect effectName)), Set.empty)
       Nothing -> throwError $ UndefinedEffect name
   Match scrutineeType clauses -> do
-    -- Scrutinee is Type as per parser and Syntax.hs
-    adtEnv <- getAdtEnv
-    scrutineeName <- case scrutineeType of -- Now scrutineeType is a Type
-      TAlgebraicData name -> return name
-      _ -> throwError $ CustomErrorType "Scrutinee in Match must be an algebraic data type name."
-
-    adtInfo <- case Map.lookup scrutineeName adtEnv of
-      Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> scrutineeName
-      Just info -> return info
-    let adtConstructorsMap = adtConstructors adtInfo
-
+    -- Scrutinee can be any type now: ADT, primitive (number, boolean), or tuple
     when (null clauses) $
       throwError $
         CustomErrorType "Match expression cannot have empty clauses"
 
-    (firstBranchTypeOpt, totalClauseEffects) <- foldM (processClause adtConstructorsMap scrutineeType) (Nothing, Set.empty) clauses
+    -- Process based on scrutinee type
+    (adtConstructorsMap, processedClauses) <- case scrutineeType of
+      -- For Algebraic Data Types
+      TAlgebraicData name -> do
+        adtEnv <- getAdtEnv
+        adtInfo <- case Map.lookup name adtEnv of
+          Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> name
+          Just info -> return info
+        return (adtConstructors adtInfo, clauses)
+
+      -- For Primitive Types (Number, Boolean) and Tuples
+      _ -> return (Map.empty, clauses)
+
+    (firstBranchTypeOpt, totalClauseEffects) <- foldM (processClause adtConstructorsMap scrutineeType) (Nothing, Set.empty) processedClauses
 
     finalMatchExprType <- case firstBranchTypeOpt of
       Nothing -> throwError $ CustomErrorType "Could not determine type of match expression"
       Just t -> return t
 
-    -- Exhaustiveness Check for Match
-    let (coveredConstructors, hasWildcardOrVar) =
-          foldr
-            ( \(Clause p _) (accSet, accBool) -> case p of
-                PConstructor cn _ -> (Set.insert cn accSet, accBool)
-                PVar _ -> (accSet, True)
-                PWildcard -> (accSet, True)
-            )
-            (Set.empty, False)
-            clauses
-    unless hasWildcardOrVar $ do
-      let allAdtConstructors = Map.keysSet adtConstructorsMap
-      unless (allAdtConstructors `Set.isSubsetOf` coveredConstructors) $
-        throwError $
-          CustomErrorType $
-            "Pattern matching is not exhaustive for ADT '" <> scrutineeName <> "'. Missing: " <> T.pack (show (Set.toList (allAdtConstructors `Set.difference` coveredConstructors)))
+    -- Exhaustiveness Check based on scrutinee type
+    case scrutineeType of
+      -- For algebraic data types
+      TAlgebraicData name -> do
+        let (coveredConstructors, hasWildcardOrVar) =
+              foldr
+                ( \(Clause p _) (accSet, accBool) -> case p of
+                    PConstructor cn _ -> (Set.insert cn accSet, accBool)
+                    PVar _ -> (accSet, True)
+                    PWildcard -> (accSet, True)
+                    _ -> (accSet, accBool) -- Other patterns don't contribute to ADT coverage
+                )
+                (Set.empty, False)
+                clauses
+
+        unless hasWildcardOrVar $ do
+          let allAdtConstructors = Map.keysSet adtConstructorsMap
+          unless (allAdtConstructors `Set.isSubsetOf` coveredConstructors) $
+            throwError $
+              CustomErrorType $
+                "Pattern matching is not exhaustive for ADT '" <> name <> "'. Missing: " <> T.pack (show (Set.toList (allAdtConstructors `Set.difference` coveredConstructors)))
+
+      -- For number
+      TNumber -> do
+        let (hasNumberPattern, hasWildcardOrVar) =
+              foldr
+                ( \(Clause p _) (accNum, accWild) -> case p of
+                    PNumber _ -> (True, accWild)
+                    PVar _ -> (accNum, True)
+                    PWildcard -> (accNum, True)
+                    _ -> (accNum, accWild)
+                )
+                (False, False)
+                clauses
+
+        unless (hasNumberPattern || hasWildcardOrVar) $
+          throwError $
+            CustomErrorType "Pattern matching is not exhaustive for Number type. Add a number pattern or wildcard."
+
+      -- For boolean
+      TBool -> do
+        let patterns = map (\(Clause p _) -> p) clauses
+        let hasTruePattern = any (\p -> case p of PBool True -> True; _ -> False) patterns
+        let hasFalsePattern = any (\p -> case p of PBool False -> True; _ -> False) patterns
+        let hasWildcardOrVar = any (\p -> case p of PVar _ -> True; PWildcard -> True; _ -> False) patterns
+
+        unless (hasWildcardOrVar || (hasTruePattern && hasFalsePattern)) $
+          throwError $
+            CustomErrorType "Pattern matching is not exhaustive for Boolean type. Need to handle both True and False cases."
+
+      -- For tuple
+      TTuple types -> do
+        let hasTuplePattern = any (\(Clause p _) -> case p of PTuple _ -> True; _ -> False) clauses
+        let hasWildcardOrVar = any (\(Clause p _) -> case p of PVar _ -> True; PWildcard -> True; _ -> False) clauses
+
+        unless (hasTuplePattern || hasWildcardOrVar) $
+          throwError $
+            CustomErrorType $
+              "Pattern matching is not exhaustive for Tuple type with " <> T.pack (show (length types)) <> " elements."
+
+      -- For other types, we don't enforce specific exhaustiveness rules
+      _ -> return ()
 
     -- The type of a Match expression is TFunction ScrutineeType BranchType.
-    -- This seems to be the convention in the original code.
     return (TFunction scrutineeType (finalMatchExprType, totalClauseEffects), Set.empty)
   Handle handlerType handlerClauses -> do
     effectEnv <- getEffectEnv
@@ -241,7 +289,9 @@ getPatternBindings actualScrutineeType pattern adtCtorMap = case pattern of
   PTuple subPatterns -> case actualScrutineeType of
     TTuple elementTypes -> do
       when (length subPatterns /= length elementTypes) $
-        throwError $ CustomErrorType $ "Tuple pattern arity mismatch. Expected " <> T.pack (show (length elementTypes)) <> " elements, got " <> T.pack (show (length subPatterns))
+        throwError $
+          CustomErrorType $
+            "Tuple pattern arity mismatch. Expected " <> T.pack (show (length elementTypes)) <> " elements, got " <> T.pack (show (length subPatterns))
       -- Recursively get bindings for sub-patterns
       listOfBindings <- zipWithM (\p t -> getPatternBindings t p adtCtorMap) subPatterns elementTypes
       return $ concat listOfBindings
