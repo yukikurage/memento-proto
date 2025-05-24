@@ -5,7 +5,13 @@ module Language.Memento.Parser.Patterns (
   clauseParser,
 ) where
 
-import Language.Memento.Parser.Core
+import Language.Memento.Parser.Core (
+  Parser,
+  lexeme,
+  symbol,
+  parens,
+  pascalCaseIdentifier,
+  snakeCaseIdentifier) -- Added specific identifiers
 import Language.Memento.Syntax (Clause (..), Expr, Pattern (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -15,15 +21,15 @@ patternParser :: Parser Pattern
 patternParser =
   lexeme $
     choice
-      [ -- コンストラクタパターン: (ConstructorName var1 var2 ...)
+      [ -- コンストラクタパターン: (ConstructorName varName) - Assuming one variable for now as per PConstructor structure
         try $ do
-          constructorName <- identifier
-          varName <- identifier -- Zero or more variable names
+          constructorName <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
+          varName <- snakeCaseIdentifier          -- Changed to snakeCaseIdentifier
           return $ PConstructor constructorName varName
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
       , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
-        PVar <$> identifier
+        PVar <$> snakeCaseIdentifier -- Changed to snakeCaseIdentifier
       ]
 
 {- | match節のパーサー

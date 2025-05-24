@@ -9,7 +9,17 @@ module Language.Memento.Parser.Definitions (
   definitionParser,
 ) where
 
-import Language.Memento.Parser.Core
+import Language.Memento.Parser.Core (
+  Parser,
+  lexeme,
+  symbol,
+  parens,
+  brackets,
+  rword,
+  sc,
+  pascalCaseIdentifier,
+  snakeCaseIdentifier,
+  lowerCamelCaseIdentifier) -- Added lowerCamelCaseIdentifier as requested
 import Language.Memento.Parser.Expressions (expr)
 import Language.Memento.Parser.Types (typeAnnotation, typeExpr)
 import Language.Memento.Syntax (ConstructorDef (..), Definition (..), OperatorDef (..))
@@ -21,7 +31,7 @@ import Text.Megaparsec.Char
 -}
 constructorDefinitionParser :: Parser ConstructorDef
 constructorDefinitionParser = lexeme $ do
-  name <- identifier
+  name <- pascalCaseIdentifier -- Changed from identifier
   symbol ":"
   typ <- typeExpr -- from Types
   return $ ConstructorDef name typ
@@ -31,7 +41,7 @@ constructorDefinitionParser = lexeme $ do
 -}
 operatorDefParser :: Parser OperatorDef
 operatorDefParser = lexeme $ do
-  name <- identifier
+  name <- pascalCaseIdentifier -- Changed from identifier
   symbol ":"
   typ <- typeExpr -- from Types
   return $ OperatorDef name typ
@@ -42,7 +52,7 @@ operatorDefParser = lexeme $ do
 dataDefinitionParser :: Parser Definition
 dataDefinitionParser = lexeme $ do
   rword "data"
-  name <- identifier
+  name <- pascalCaseIdentifier -- Changed from identifier
   constructors <- brackets (sepEndBy constructorDefinitionParser (symbol ","))
   symbol ";"
   return $ DataDef name constructors
@@ -53,7 +63,7 @@ dataDefinitionParser = lexeme $ do
 effectDefinitionParser :: Parser Definition
 effectDefinitionParser = lexeme $ do
   rword "effect"
-  name <- identifier
+  name <- pascalCaseIdentifier -- Changed from identifier
   operators <- brackets (sepEndBy operatorDefParser (symbol ","))
   symbol ";"
   return $ EffectDef name operators
@@ -61,7 +71,7 @@ effectDefinitionParser = lexeme $ do
 valDefinitionParser :: Parser Definition
 valDefinitionParser = do
   rword "val"
-  name <- identifier
+  name <- snakeCaseIdentifier -- Changed from identifier
   symbol ":"
   typ <- typeAnnotation -- from Types
   symbol ":="

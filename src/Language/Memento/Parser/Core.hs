@@ -11,6 +11,9 @@ module Language.Memento.Parser.Core (
   rword,
   reservedWords,
   identifier,
+  lowerCamelCaseIdentifier,
+  pascalCaseIdentifier,
+  snakeCaseIdentifier
 ) where
 
 import Control.Monad.Combinators.Expr
@@ -71,3 +74,34 @@ identifier = (lexeme . try) $ do
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
+
+-- | lowerCamelCaseIdentifier
+lowerCamelCaseIdentifier :: Parser Text
+lowerCamelCaseIdentifier = (lexeme . try) $ do
+  fc <- lowerChar
+  rest <- many alphaNumChar
+  let name = T.pack (fc : rest)
+  if name `elem` reservedWords
+    then fail $ "keyword " <> show name <> " cannot be an identifier"
+    else return name
+
+-- | pascalCaseIdentifier
+pascalCaseIdentifier :: Parser Text
+pascalCaseIdentifier = (lexeme . try) $ do
+  fc <- upperChar
+  rest <- many alphaNumChar
+  let name = T.pack (fc : rest)
+  if name `elem` reservedWords
+    then fail $ "keyword " <> show name <> " cannot be an identifier"
+    else return name
+
+-- | snakeCaseIdentifier
+snakeCaseIdentifier :: Parser Text
+snakeCaseIdentifier = (lexeme . try) $ do
+  nameStr <- (:) <$> lowerChar <*> many (lowerChar <|> digitChar <|> char '_')
+  let name = T.pack nameStr
+  if "__" `T.isInfixOf` name || T.isSuffixOf "_" name
+    then fail "identifier cannot contain consecutive underscores or end with an underscore"
+    else if name `elem` reservedWords
+      then fail $ "keyword " <> show name <> " cannot be an identifier"
+      else return name

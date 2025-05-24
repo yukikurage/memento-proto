@@ -14,8 +14,16 @@ module Language.Memento.Parser.Expressions (
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
-import Language.Memento.Parser.Core
-
+import Language.Memento.Parser.Core (
+  Parser,
+  lexeme,
+  symbol,
+  parens,
+  rword,
+  number, -- Added number
+  pascalCaseIdentifier,
+  snakeCaseIdentifier,
+  lowerCamelCaseIdentifier) -- Added specific identifiers and number
 -- Assuming typeTerm is needed by matchExprParser via term
 import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
 import Language.Memento.Parser.Types (typeExpr, typeTerm)
@@ -75,7 +83,7 @@ ifExpr = (lexeme . try) $ do
 -- | ラムダ式
 lambdaExpr :: Parser Expr
 lambdaExpr = do
-  name <- identifier
+  name <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
   mType <- optional $ do
     void $ symbol ":"
     typeTerm -- from Types
@@ -87,7 +95,7 @@ lambdaExpr = do
 doExpr :: Parser Expr
 doExpr = (lexeme . try) $ do
   rword "do"
-  name <- identifier
+  name <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
   return $ Do name
 
 {- | match式のパーサー
@@ -111,18 +119,18 @@ handlerClauseParser = lexeme $ do
   clause <-
     try
       ( do
-          argVar <- identifier
+          argVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
           symbol "|>"
-          opName <- identifier
+          opName <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
           symbol "|>"
-          kVar <- identifier
+          kVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
           symbol ")"
           symbol "->"
           body <- expr -- Recursive call to expr
           return $ HandlerClause opName argVar kVar body
       )
       <|> ( do
-              retVar <- identifier
+              retVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
               symbol ")"
               symbol "->"
               body <- expr -- Recursive call to expr
@@ -151,7 +159,7 @@ term =
     , try matchExprParser
     , try handlerExprParser
     , ifExpr
-    , Var <$> identifier
+    , Var <$> snakeCaseIdentifier -- Changed to snakeCaseIdentifier
     , Number <$> number
     , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]
