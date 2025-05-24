@@ -44,16 +44,6 @@ typeCheckProgram (Program definitions) = evalState (runExceptT go) initialState
     -- Pass 1: Register ADTs and their constructors
     registerAdtsAndConstructors definitions
 
-    traceM "Pass 1: Register ADTs and their constructors"
-    tsEnv <- getEnv
-    traceM $ "tsEnv: " <> show tsEnv
-    tsAdtEnv <- getAdtEnv
-    traceM $ "tsAdtEnv: " <> show tsAdtEnv
-    tsOperatorEnv <- getOperatorEnv
-    traceM $ "tsOperatorEnv: " <> show tsOperatorEnv
-    tsEffectEnv <- getEffectEnv
-    traceM $ "tsEffectEnv: " <> show tsEffectEnv
-
     -- Pass 2: Register Effects and their operator signatures
     registerEffects definitions
 

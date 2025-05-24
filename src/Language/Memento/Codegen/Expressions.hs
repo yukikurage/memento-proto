@@ -23,16 +23,45 @@ partitionHandlerClausesForCodegen clauses = go clauses ([], [])
     HandlerReturnClause{} -> go cs (ops, rets ++ [c])
 
 generatePattern :: T.Text -> Pattern -> (T.Text, [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
-generatePattern scrutineeExpr (PConstructor consName varName) =
-  let tagCheck = T.concat [scrutineeExpr, T.pack "[0] === \"", consName, T.pack "\""]
-      arityCheck = T.concat [scrutineeExpr, T.pack ".length === 2"]
-      fullCondition = T.concat [tagCheck, T.pack " && ", arityCheck]
-      bindings = [(varName, T.concat [scrutineeExpr, T.pack "[1]"])]
-   in (fullCondition, bindings)
-generatePattern scrutineeExpr (PVar varName) =
-  (T.pack "true", [(varName, scrutineeExpr)])
-generatePattern _ PWildcard =
-  (T.pack "true", [])
+generatePattern scrutineeExpr = \case
+  PNumber n ->
+    (T.concat [scrutineeExpr, " === ", T.pack (show n)], [])
+  PBool b ->
+    (T.concat [scrutineeExpr, " === ", T.pack (if b then "true" else "false")], [])
+  PTuple subPatterns ->
+    let arity = length subPatterns
+        arityCheck = T.concat ["Array.isArray(", scrutineeExpr, ") && ", scrutineeExpr, ".length === ", T.pack (show arity)]
+        
+        processSubPattern (index, pat) =
+          let elementScrutinee = T.concat [scrutineeExpr, "[", T.pack (show index), "]"]
+          in generatePattern elementScrutinee pat
+
+        results = map processSubPattern (zip [0..] subPatterns)
+        
+        subConditions = map fst results
+        subBindingsList = map snd results
+        
+        fullCondition = T.intercalate " && " (arityCheck : subConditions)
+        allBindings = concat subBindingsList
+    in (fullCondition, allBindings)
+  PConstructor consName varName ->
+    -- Assuming ADT representation: [constructorName, value]
+    let tagCheck = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
+        -- This arity check is specific to a single-argument constructor.
+        -- A more general ADT representation might not need scrutineeExpr.length check here,
+        -- or it might depend on the constructor definition.
+        -- For now, keeping it similar to original if it implied a fixed structure.
+        -- If constructors can have different numbers of arguments, this model is too simple.
+        -- Syntax.hs: ConstructorDef Text Type. This doesn't specify arity for the data it holds.
+        -- Let's assume the [tag, value] structure is consistent.
+        arityCheck = T.concat [scrutineeExpr, ".length === 2"] -- Check for [tag, value] structure
+        fullCondition = T.concat [tagCheck, " && ", arityCheck]
+        bindings = [(varName, T.concat [scrutineeExpr, "[1]"])]
+    in (fullCondition, bindings)
+  PVar varName ->
+    (T.pack "true", [(varName, scrutineeExpr)])
+  PWildcard ->
+    (T.pack "true", [])
 
 generateBindings :: [(T.Text, T.Text)] -> T.Text
 generateBindings bindings =
@@ -62,6 +91,22 @@ generateExpr = \case
           , "  )"
           , ")"
           ]
+  Tuple es ->
+    let exprs = map generateExpr es
+        exprsWithIndex = zip exprs [0 ..]
+        tupleVal idx = "_tuple_val_" <> T.pack (show idx) <> "_"
+        buildTupleExpr :: (T.Text, Int) -> T.Text -> T.Text
+        buildTupleExpr (expr, idx) acc =
+          "bind(" <> expr <> ", (" <> tupleVal idx <> ") =>" <> acc <> ")"
+     in foldr
+          buildTupleExpr
+          ( "ret(["
+              <> T.intercalate
+                ","
+                (map (\(_, idx) -> tupleVal idx) exprsWithIndex)
+              <> "])"
+          )
+          exprsWithIndex
   If cond then_ else_ ->
     let condExpr = generateExpr cond
         thenExpr = generateExpr then_

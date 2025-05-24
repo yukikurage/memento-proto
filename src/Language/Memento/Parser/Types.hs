@@ -13,10 +13,11 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Language.Memento.Parser.Core (
   Parser,
+  brackets,
   parens,
   rword,
   symbol,
-  upperIdentifier, -- 大文字で始まる識別子を使用
+  upperIdentifier,
  )
 import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 import Text.Megaparsec
@@ -37,11 +38,16 @@ effectsParser =
 typeTerm :: Parser Type
 typeTerm =
   choice
-    [ try $ parens typeExpr -- Recursive call to the new typeExpr
+    [ tupleTypeParser -- Added tupleTypeParser
+    , try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
     , TAlgebraicData <$> upperIdentifier -- 大文字で始まる識別子
     ]
+
+-- | タプル型のパーサー
+tupleTypeParser :: Parser Type
+tupleTypeParser = TTuple <$> brackets (sepBy typeExpr (symbol ","))
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
 functionTypeSuffixParser :: Type -> Parser Type

@@ -154,7 +154,8 @@ handlerExprParser = lexeme $ do
 term :: Parser Expr
 term =
   choice
-    [ try $ parens expr -- Recursive call to expr
+    [ tupleExprParser -- Added tupleExprParser
+    , try $ parens expr -- Recursive call to expr
     , try lambdaExpr
     , try doExpr
     , try matchExprParser
@@ -164,6 +165,10 @@ term =
     , Number <$> number
     , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]
+
+-- | タプル式のパーサー
+tupleExprParser :: Parser Expr
+tupleExprParser = Tuple <$> brackets (sepBy expr (symbol ","))
 
 -- | 式
 expr :: Parser Expr
