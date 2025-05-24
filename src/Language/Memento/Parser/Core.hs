@@ -11,9 +11,8 @@ module Language.Memento.Parser.Core (
   rword,
   reservedWords,
   identifier,
-  lowerCamelCaseIdentifier,
-  pascalCaseIdentifier,
-  snakeCaseIdentifier
+  lowerIdentifier,
+  upperIdentifier,
 ) where
 
 import Control.Monad.Combinators.Expr
@@ -75,33 +74,24 @@ identifier = (lexeme . try) $ do
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
--- | lowerCamelCaseIdentifier
-lowerCamelCaseIdentifier :: Parser Text
-lowerCamelCaseIdentifier = (lexeme . try) $ do
+-- | lowerIdentifier (先頭が小文字の識別子)
+lowerIdentifier :: Parser Text
+lowerIdentifier = (lexeme . try) $ do
   fc <- lowerChar
-  rest <- many alphaNumChar
+  rest <- many (alphaNumChar <|> char '_')
   let name = T.pack (fc : rest)
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
--- | pascalCaseIdentifier
-pascalCaseIdentifier :: Parser Text
-pascalCaseIdentifier = (lexeme . try) $ do
+-- | upperIdentifier (先頭が大文字の識別子)
+upperIdentifier :: Parser Text
+upperIdentifier = (lexeme . try) $ do
   fc <- upperChar
-  rest <- many alphaNumChar
+  rest <- many (alphaNumChar <|> char '_')
   let name = T.pack (fc : rest)
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
--- | snakeCaseIdentifier
-snakeCaseIdentifier :: Parser Text
-snakeCaseIdentifier = (lexeme . try) $ do
-  nameStr <- (:) <$> lowerChar <*> many (lowerChar <|> digitChar <|> char '_')
-  let name = T.pack nameStr
-  if "__" `T.isInfixOf` name || T.isSuffixOf "_" name
-    then fail "identifier cannot contain consecutive underscores or end with an underscore"
-    else if name `elem` reservedWords
-      then fail $ "keyword " <> show name <> " cannot be an identifier"
-      else return name
+-- 旧識別子パーサーは削除し、lowerIdentifierとupperIdentifierに統一

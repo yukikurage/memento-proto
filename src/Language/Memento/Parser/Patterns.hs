@@ -8,10 +8,11 @@ module Language.Memento.Parser.Patterns (
 import Language.Memento.Parser.Core (
   Parser,
   lexeme,
-  symbol,
+  lowerIdentifier, -- 新しい識別子に統一
   parens,
-  pascalCaseIdentifier,
-  snakeCaseIdentifier) -- Added specific identifiers
+  symbol,
+  upperIdentifier,
+ )
 import Language.Memento.Syntax (Clause (..), Expr, Pattern (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -23,13 +24,13 @@ patternParser =
     choice
       [ -- コンストラクタパターン: (ConstructorName varName) - Assuming one variable for now as per PConstructor structure
         try $ do
-          constructorName <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
-          varName <- snakeCaseIdentifier          -- Changed to snakeCaseIdentifier
+          constructorName <- upperIdentifier -- 大文字で始まる識別子
+          varName <- lowerIdentifier -- 小文字で始まる識別子
           return $ PConstructor constructorName varName
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
       , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
-        PVar <$> snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+        PVar <$> lowerIdentifier -- 小文字で始まる識別子
       ]
 
 {- | match節のパーサー

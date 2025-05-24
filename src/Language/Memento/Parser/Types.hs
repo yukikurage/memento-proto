@@ -13,17 +13,18 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Language.Memento.Parser.Core (
   Parser,
-  symbol,
   parens,
   rword,
-  pascalCaseIdentifier) -- Added pascalCaseIdentifier, removed generic identifier implicitly
+  symbol,
+  upperIdentifier, -- 大文字で始まる識別子を使用
+ )
 import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 
 -- | エフェクトのパーサー
 effectParser :: Parser Effect
-effectParser = Effect <$> pascalCaseIdentifier -- Changed to pascalCaseIdentifier
+effectParser = Effect <$> upperIdentifier -- 大文字で始まる識別子
 
 effectsParser :: Parser Effects
 effectsParser =
@@ -39,7 +40,7 @@ typeTerm =
     [ try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
-    , TAlgebraicData <$> pascalCaseIdentifier -- Changed to pascalCaseIdentifier
+    , TAlgebraicData <$> upperIdentifier -- 大文字で始まる識別子
     ]
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])

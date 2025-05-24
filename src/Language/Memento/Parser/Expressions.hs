@@ -16,15 +16,16 @@ import Control.Monad.Combinators.Expr
 import Data.Text (Text)
 import Language.Memento.Parser.Core (
   Parser,
+  brackets,
   lexeme,
-  symbol,
+  lowerIdentifier,
+  number,
   parens,
   rword,
-  number, -- Added number
-  pascalCaseIdentifier,
-  snakeCaseIdentifier,
-  lowerCamelCaseIdentifier) -- Added specific identifiers and number
--- Assuming typeTerm is needed by matchExprParser via term
+  symbol,
+  upperIdentifier,
+ )
+
 import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
 import Language.Memento.Parser.Types (typeExpr, typeTerm)
 import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
@@ -83,7 +84,7 @@ ifExpr = (lexeme . try) $ do
 -- | ラムダ式
 lambdaExpr :: Parser Expr
 lambdaExpr = do
-  name <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+  name <- lowerIdentifier -- 小文字で始まる識別子
   mType <- optional $ do
     void $ symbol ":"
     typeTerm -- from Types
@@ -95,7 +96,7 @@ lambdaExpr = do
 doExpr :: Parser Expr
 doExpr = (lexeme . try) $ do
   rword "do"
-  name <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
+  name <- upperIdentifier -- 大文字で始まる識別子
   return $ Do name
 
 {- | match式のパーサー
@@ -119,18 +120,18 @@ handlerClauseParser = lexeme $ do
   clause <-
     try
       ( do
-          argVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+          argVar <- lowerIdentifier -- 小文字で始まる識別子
           symbol "|>"
-          opName <- pascalCaseIdentifier -- Changed to pascalCaseIdentifier
+          opName <- upperIdentifier -- 大文字で始まる識別子
           symbol "|>"
-          kVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+          kVar <- lowerIdentifier -- 小文字で始まる識別子
           symbol ")"
           symbol "->"
           body <- expr -- Recursive call to expr
           return $ HandlerClause opName argVar kVar body
       )
       <|> ( do
-              retVar <- snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+              retVar <- lowerIdentifier -- 小文字で始まる識別子
               symbol ")"
               symbol "->"
               body <- expr -- Recursive call to expr
@@ -159,7 +160,7 @@ term =
     , try matchExprParser
     , try handlerExprParser
     , ifExpr
-    , Var <$> snakeCaseIdentifier -- Changed to snakeCaseIdentifier
+    , Var <$> lowerIdentifier -- 小文字で始まる識別子
     , Number <$> number
     , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]

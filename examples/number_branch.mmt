@@ -1,0 +1,11 @@
+val x : number := 10;
+
+val main : number -> number 
+  := tmp 
+  -> x 
+    |> branch number [
+      (0) -> 0, // Base case for zero
+      (n) -> n + 1 // Increment the number
+    ]
+    |> result
+  -> result;
