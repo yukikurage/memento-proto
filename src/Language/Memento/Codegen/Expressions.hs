@@ -62,6 +62,22 @@ generateExpr = \case
           , "  )"
           , ")"
           ]
+  Tuple es ->
+    let exprs = map generateExpr es
+        exprsWithIndex = zip exprs [0 ..]
+        tupleVal idx = "_tuple_val_" <> T.pack (show idx) <> "_"
+        buildTupleExpr :: (T.Text, Int) -> T.Text -> T.Text
+        buildTupleExpr (expr, idx) acc =
+          "bind(" <> expr <> ", (" <> tupleVal idx <> ") =>" <> acc <> ")"
+     in foldr
+          buildTupleExpr
+          ( "ret(["
+              <> T.intercalate
+                ","
+                (map (\(_, idx) -> tupleVal idx) exprsWithIndex)
+              <> "])"
+          )
+          exprsWithIndex
   If cond then_ else_ ->
     let condExpr = generateExpr cond
         thenExpr = generateExpr then_

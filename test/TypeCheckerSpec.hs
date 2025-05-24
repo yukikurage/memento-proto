@@ -313,6 +313,67 @@ spec = describe "TypeChecker" $ do
                 ]
             check final_program `shouldSatisfy` isRight
 
+    describe "Tuple Expressions" $ do
+        it "type checks an empty tuple" $ do
+            let tupleExpr = Tuple []
+            let expectedType = TTuple []
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            -- Expected environment: Map.fromList [("testTuple", TFunction (TTuple []) (TTuple [], Set.empty))]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
+
+        it "type checks a tuple with simple literals" $ do
+            let tupleExpr = Tuple [Number 1.0, Bool True]
+            let expectedType = TTuple [TNumber, TBool]
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
+
+        it "type checks a tuple containing a variable" $ do
+            let tupleExpr = Tuple [Var "x", Bool False]
+            let expectedType = TTuple [TNumber, TBool]
+            let expectedEffects = Set.empty
+            -- The lambda takes "x" as an argument.
+            let prog = Program [ValDef "testTuple"
+                                (TFunction TNumber (expectedType, expectedEffects)) -- Function type: number -> (TTuple [TNumber, TBool], Set.empty)
+                                (Lambda "x" (Just TNumber) tupleExpr)
+                               ]
+            check prog `shouldBe` Right (Map.fromList [("x", TNumber), ("testTuple", TFunction TNumber (expectedType, expectedEffects))])
+
+        it "type checks a nested tuple" $ do
+            let tupleExpr = Tuple [Number 1.0, Tuple [Bool True, Number 2.0]]
+            let expectedType = TTuple [TNumber, TTuple [TBool, TNumber]]
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
+
+        it "type checks a tuple with an expression that produces effects" $ do
+            -- Define an effect and an operator
+            let effectE1 = EffectDef "E1" [OperatorDef "OpE1" (TFunction TNumber (TBool, Set.empty))]
+            -- Expression with effect: Apply (Do "OpE1") (Number 1.0) -> infers to (TBool, Set.singleton (Effect "E1"))
+            let exprWithEffect = Apply (Do "OpE1") (Number 1.0)
+
+            let tupleExpr = Tuple [Number 1.0, exprWithEffect]
+            let expectedTupleContentsType = TTuple [TNumber, TBool] -- The types within the tuple
+            let expectedTupleEffects = Set.singleton (Effect "E1") -- The combined effects
+
+            -- The ValDef will be for a function that, when called, produces this tuple and its effects.
+            -- val testTuple : () -> ((number, bool) with <E1>) := _ -> (1.0, (do OpE1) 1.0)
+            let valDef = ValDef "testTuple"
+                                (TFunction (TTuple []) (expectedTupleContentsType, expectedTupleEffects))
+                                (Lambda "_" (Just (TTuple [])) tupleExpr)
+
+            let prog = Program [effectE1, valDef]
+            
+            -- Expected types in env:
+            -- "OpE1": TFunction TNumber (TBool, Set.singleton (Effect "E1"))
+            -- "testTuple": TFunction (TTuple []) (TTuple [TNumber, TBool], Set.singleton (Effect "E1"))
+            let expectedEnv = Map.fromList [
+                    ("OpE1", TFunction TNumber (TBool, Set.singleton (Effect "E1"))),
+                    ("testTuple", TFunction (TTuple []) (expectedTupleContentsType, expectedTupleEffects))
+                    ]
+            check prog `shouldBe` Right expectedEnv
+
 
 isRight :: Either a b -> Bool
 isRight (Right _) = True

@@ -218,6 +218,16 @@ inferType expr = case expr of
             <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
 
     return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
+  Tuple exprsList -> do
+    -- Infer types and effects for each expression in the tuple
+    typedExprs <- mapM inferType exprsList
+    -- Separate the types and effects
+    let (inferredTypes, inferredEffectsList) = unzip typedExprs
+    -- The resulting type is a tuple of the inferred types
+    let tupleType = TTuple inferredTypes
+    -- The resulting effects are the union of all inferred effects
+    let combinedEffects = Set.unions inferredEffectsList
+    return (tupleType, combinedEffects)
 
 -- Helper for Match clause processing
 processClause :: Map.Map Text ConstructorSignature -> Type -> (Maybe Type, Effects) -> Clause -> TypeCheck (Maybe Type, Effects)
