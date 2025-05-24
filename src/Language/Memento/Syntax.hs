@@ -77,7 +77,7 @@ data BinOp
 
 -- | パターンの定義
 data Pattern
-  = PConstructor Text [Text] -- コンストラクタパターン (コンストラクタ名, 変数名のリスト)
+  = PConstructor Text Text -- コンストラクタパターン (コンストラクタ名, 変数名)
   | PVar Text -- 変数パターン (変数名)
   | PWildcard -- ワイルドカードパターン (_)
   deriving (Show, Eq, Generic)
