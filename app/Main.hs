@@ -46,8 +46,6 @@ main = do
             Left err -> hPutStrLn stderr $ "Type error: " ++ show err
             Right typeEnv -> do
               putStrLn $ "Type checking successful"
-              putStrLn $ "Definitions: " ++ show (Map.size typeEnv)
-              mapM_ printTypeInfo (Map.toList typeEnv)
               let jsCode = generateJS program
               TIO.writeFile outputFile jsCode
               putStrLn $ "Output written to: " ++ outputFile
