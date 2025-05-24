@@ -5,7 +5,16 @@ module Language.Memento.Parser.Patterns (
   clauseParser,
 ) where
 
-import Language.Memento.Parser.Core
+import Language.Memento.Parser.Core (
+  Parser,
+  brackets,
+  lexeme,
+  lowerIdentifier,
+  number,
+  parens,
+  symbol,
+  upperIdentifier,
+ )
 import Language.Memento.Syntax (Clause (..), Expr, Pattern (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -29,13 +38,13 @@ patternParser =
         -- or the PConstructor type/parsing should be more flexible.
         -- For now, sticking to the existing structure for PConstructor.
         try $ do
-          constructorName <- identifier
-          varName <- identifier
+          constructorName <- upperIdentifier -- 大文字で始まる識別子
+          varName <- lowerIdentifier -- 小文字で始まる識別子
           return $ PConstructor constructorName varName
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
-      , -- 変数パターン: varName (must come after others to avoid ambiguity)
-        PVar <$> identifier
+      , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
+        PVar <$> lowerIdentifier -- 小文字で始まる識別子
       ]
 
 {- | match節のパーサー

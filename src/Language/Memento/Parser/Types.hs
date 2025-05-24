@@ -11,14 +11,21 @@ module Language.Memento.Parser.Types (
 
 import qualified Data.Set as Set
 import Data.Text (Text)
-import Language.Memento.Parser.Core
+import Language.Memento.Parser.Core (
+  Parser,
+  brackets,
+  parens,
+  rword,
+  symbol,
+  upperIdentifier,
+ )
 import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 
 -- | エフェクトのパーサー
 effectParser :: Parser Effect
-effectParser = Effect <$> identifier -- Parses any identifier as an Effect
+effectParser = Effect <$> upperIdentifier -- 大文字で始まる識別子
 
 effectsParser :: Parser Effects
 effectsParser =
@@ -35,7 +42,7 @@ typeTerm =
     , try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
-    , TAlgebraicData <$> identifier -- For ADT names
+    , TAlgebraicData <$> upperIdentifier -- 大文字で始まる識別子
     ]
 
 -- | タプル型のパーサー

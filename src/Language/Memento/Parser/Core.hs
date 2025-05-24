@@ -11,6 +11,8 @@ module Language.Memento.Parser.Core (
   rword,
   reservedWords,
   identifier,
+  lowerIdentifier,
+  upperIdentifier,
 ) where
 
 import Control.Monad.Combinators.Expr
@@ -71,3 +73,25 @@ identifier = (lexeme . try) $ do
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
+
+-- | lowerIdentifier (先頭が小文字の識別子)
+lowerIdentifier :: Parser Text
+lowerIdentifier = (lexeme . try) $ do
+  fc <- lowerChar
+  rest <- many (alphaNumChar <|> char '_')
+  let name = T.pack (fc : rest)
+  if name `elem` reservedWords
+    then fail $ "keyword " <> show name <> " cannot be an identifier"
+    else return name
+
+-- | upperIdentifier (先頭が大文字の識別子)
+upperIdentifier :: Parser Text
+upperIdentifier = (lexeme . try) $ do
+  fc <- upperChar
+  rest <- many (alphaNumChar <|> char '_')
+  let name = T.pack (fc : rest)
+  if name `elem` reservedWords
+    then fail $ "keyword " <> show name <> " cannot be an identifier"
+    else return name
+
+-- 旧識別子パーサーは削除し、lowerIdentifierとupperIdentifierに統一

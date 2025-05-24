@@ -14,9 +14,18 @@ module Language.Memento.Parser.Expressions (
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
-import Language.Memento.Parser.Core
+import Language.Memento.Parser.Core (
+  Parser,
+  brackets,
+  lexeme,
+  lowerIdentifier,
+  number,
+  parens,
+  rword,
+  symbol,
+  upperIdentifier,
+ )
 
--- Assuming typeTerm is needed by matchExprParser via term
 import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
 import Language.Memento.Parser.Types (typeExpr, typeTerm)
 import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
@@ -75,7 +84,7 @@ ifExpr = (lexeme . try) $ do
 -- | ラムダ式
 lambdaExpr :: Parser Expr
 lambdaExpr = do
-  name <- identifier
+  name <- lowerIdentifier -- 小文字で始まる識別子
   mType <- optional $ do
     void $ symbol ":"
     typeTerm -- from Types
@@ -87,7 +96,7 @@ lambdaExpr = do
 doExpr :: Parser Expr
 doExpr = (lexeme . try) $ do
   rword "do"
-  name <- identifier
+  name <- upperIdentifier -- 大文字で始まる識別子
   return $ Do name
 
 {- | match式のパーサー
@@ -111,18 +120,18 @@ handlerClauseParser = lexeme $ do
   clause <-
     try
       ( do
-          argVar <- identifier
+          argVar <- lowerIdentifier -- 小文字で始まる識別子
           symbol "|>"
-          opName <- identifier
+          opName <- upperIdentifier -- 大文字で始まる識別子
           symbol "|>"
-          kVar <- identifier
+          kVar <- lowerIdentifier -- 小文字で始まる識別子
           symbol ")"
           symbol "->"
           body <- expr -- Recursive call to expr
           return $ HandlerClause opName argVar kVar body
       )
       <|> ( do
-              retVar <- identifier
+              retVar <- lowerIdentifier -- 小文字で始まる識別子
               symbol ")"
               symbol "->"
               body <- expr -- Recursive call to expr
@@ -152,7 +161,7 @@ term =
     , try matchExprParser
     , try handlerExprParser
     , ifExpr
-    , Var <$> identifier
+    , Var <$> lowerIdentifier -- 小文字で始まる識別子
     , Number <$> number
     , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
     ]
