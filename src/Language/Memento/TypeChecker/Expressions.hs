@@ -218,6 +218,16 @@ inferType expr = case expr of
             <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
 
     return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
+  Tuple exprsList -> do
+    -- Infer types and effects for each expression in the tuple
+    typedExprs <- mapM inferType exprsList
+    -- Separate the types and effects
+    let (inferredTypes, inferredEffectsList) = unzip typedExprs
+    -- The resulting type is a tuple of the inferred types
+    let tupleType = TTuple inferredTypes
+    -- The resulting effects are the union of all inferred effects
+    let combinedEffects = Set.unions inferredEffectsList
+    return (tupleType, combinedEffects)
 
 -- Helper to get bindings from a pattern
 getPatternBindings :: Type -> Pattern -> Map.Map Text ConstructorSignature -> TypeCheck [(Text, Type)]

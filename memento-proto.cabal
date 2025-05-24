@@ -41,7 +41,6 @@ library
     Language.Memento.TypeChecker.Monad
     Language.Memento.TypeChecker.Registration
     Language.Memento.TypeChecker.Types
-    Main
   other-modules:
     Paths_memento_proto
   hs-source-dirs:

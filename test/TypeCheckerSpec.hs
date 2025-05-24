@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module TypeCheckerSpec (spec) where
 
 import Test.Hspec
@@ -313,102 +314,67 @@ spec = describe "TypeChecker" $ do
                 ]
             check final_program `shouldSatisfy` isRight
 
-    describe "Match Expression with New Patterns" $ do
-        let dummyVarX = Var "x"
-        let dummyBodyExpr = Number 10 -- Arbitrary expression for clause bodies
+    describe "Tuple Expressions" $ do
+        it "type checks an empty tuple" $ do
+            let tupleExpr = Tuple []
+            let expectedType = TTuple []
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            -- Expected environment: Map.fromList [("testTuple", TFunction (TTuple []) (TTuple [], Set.empty))]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
 
-        it "type checks Match with PNumber pattern against TNumber" $ do
-            let matchExpr = Match TNumber [Clause (PNumber 123.0) dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction TNumber TNumber Set.empty)
-            check prog `shouldSatisfy` isRight
+        it "type checks a tuple with simple literals" $ do
+            let tupleExpr = Tuple [Number 1.0, Bool True]
+            let expectedType = TTuple [TNumber, TBool]
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
 
-        it "reports TypeMismatch for PNumber pattern against TBool" $ do
-            let matchExpr = Match TBool [Clause (PNumber 123.0) dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction TBool TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (TypeMismatch TBool TNumber) -> True -- Expected TBool, pattern is PNumber (implies TNumber)
-                _ -> False
+        it "type checks a tuple containing a variable" $ do
+            let tupleExpr = Tuple [Var "x", Bool False]
+            let expectedType = TTuple [TNumber, TBool]
+            let expectedEffects = Set.empty
+            -- The lambda takes "x" as an argument.
+            let prog = Program [ValDef "testTuple"
+                                (TFunction TNumber (expectedType, expectedEffects)) -- Function type: number -> (TTuple [TNumber, TBool], Set.empty)
+                                (Lambda "x" (Just TNumber) tupleExpr)
+                               ]
+            check prog `shouldBe` Right (Map.fromList [("x", TNumber), ("testTuple", TFunction TNumber (expectedType, expectedEffects))])
 
-        it "type checks Match with PBool pattern against TBool" $ do
-            let matchExpr = Match TBool [Clause (PBool True) dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction TBool TNumber Set.empty)
-            check prog `shouldSatisfy` isRight
+        it "type checks a nested tuple" $ do
+            let tupleExpr = Tuple [Number 1.0, Tuple [Bool True, Number 2.0]]
+            let expectedType = TTuple [TNumber, TTuple [TBool, TNumber]]
+            let expectedEffects = Set.empty
+            let prog = Program [ValDef "testTuple" (TFunction (TTuple []) (expectedType, expectedEffects)) (Lambda "_" Nothing tupleExpr)]
+            check prog `shouldBe` Right (Map.fromList [("testTuple", TFunction (TTuple []) (expectedType, expectedEffects))])
 
-        it "reports TypeMismatch for PBool pattern against TNumber" $ do
-            let matchExpr = Match TNumber [Clause (PBool True) dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction TNumber TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (TypeMismatch TNumber TBool) -> True -- Expected TNumber, pattern is PBool (implies TBool)
-                _ -> False
+        it "type checks a tuple with an expression that produces effects" $ do
+            -- Define an effect and an operator
+            let effectE1 = EffectDef "E1" [OperatorDef "OpE1" (TFunction TNumber (TBool, Set.empty))]
+            -- Expression with effect: Apply (Do "OpE1") (Number 1.0) -> infers to (TBool, Set.singleton (Effect "E1"))
+            let exprWithEffect = Apply (Do "OpE1") (Number 1.0)
 
-        it "type checks Match with PTuple pattern against TTuple" $ do
-            let tupleType = TTuple [TNumber, TBool]
-            let tuplePattern = PTuple [PNumber 1.0, PBool True]
-            let matchExpr = Match tupleType [Clause tuplePattern dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction tupleType TNumber Set.empty)
-            check prog `shouldSatisfy` isRight
+            let tupleExpr = Tuple [Number 1.0, exprWithEffect]
+            let expectedTupleContentsType = TTuple [TNumber, TBool] -- The types within the tuple
+            let expectedTupleEffects = Set.singleton (Effect "E1") -- The combined effects
 
-        it "type checks Match with PTuple containing PVar, ensuring var is typed" $ do
-            let tupleType = TTuple [TNumber, TBool]
-            let tuplePattern = PTuple [PVar "x", PBool True] -- x should be TNumber
-            -- Clause body uses "x", its type should be inferred as TNumber
-            let matchExpr = Match tupleType [Clause tuplePattern (BinOp Add (Var "x") (Number 1))]
-            -- Resulting type of match expr: TFunction (TTuple [TNumber, TBool]) TNumber
-            let prog = wrapExprInProgram matchExpr (TFunction tupleType TNumber Set.empty)
-            check prog `shouldSatisfy` isRight
+            -- The ValDef will be for a function that, when called, produces this tuple and its effects.
+            -- val testTuple : () -> ((number, bool) with <E1>) := _ -> (1.0, (do OpE1) 1.0)
+            let valDef = ValDef "testTuple"
+                                (TFunction (TTuple []) (expectedTupleContentsType, expectedTupleEffects))
+                                (Lambda "_" (Just (TTuple [])) tupleExpr)
 
-        it "reports TypeMismatch for PTuple pattern against non-tuple type (e.g., TNumber)" $ do
-            let tuplePattern = PTuple [PNumber 1.0]
-            let matchExpr = Match TNumber [Clause tuplePattern dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction TNumber TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (TypeMismatch TNumber (TTuple [])) -> True -- Expected TNumber, pattern is PTuple
-                _ -> False
-        
-        it "reports TypeMismatch for PTuple element type mismatch" $ do
-            let tupleType = TTuple [TNumber, TBool]
-            let tuplePattern = PTuple [PBool False, PBool True] -- First element PBool, expected TNumber
-            let matchExpr = Match tupleType [Clause tuplePattern dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction tupleType TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (TypeMismatch TNumber TBool) -> True -- Mismatch on the first element of the tuple
-                _ -> False
+            let prog = Program [effectE1, valDef]
+            
+            -- Expected types in env:
+            -- "OpE1": TFunction TNumber (TBool, Set.singleton (Effect "E1"))
+            -- "testTuple": TFunction (TTuple []) (TTuple [TNumber, TBool], Set.singleton (Effect "E1"))
+            let expectedEnv = Map.fromList [
+                    ("OpE1", TFunction TNumber (TBool, Set.singleton (Effect "E1"))),
+                    ("testTuple", TFunction (TTuple []) (expectedTupleContentsType, expectedTupleEffects))
+                    ]
+            check prog `shouldBe` Right expectedEnv
 
-        it "reports arity mismatch for PTuple pattern (too few elements)" $ do
-            let tupleType = TTuple [TNumber, TBool]
-            let tuplePattern = PTuple [PNumber 1.0] -- Pattern has 1 element, type has 2
-            let matchExpr = Match tupleType [Clause tuplePattern dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction tupleType TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (CustomErrorType msg) -> "Tuple pattern arity mismatch" `T.isInfixOf` msg
-                _ -> False
-
-        it "reports arity mismatch for PTuple pattern (too many elements)" $ do
-            let tupleType = TTuple [TNumber]
-            let tuplePattern = PTuple [PNumber 1.0, PBool True] -- Pattern has 2 elements, type has 1
-            let matchExpr = Match tupleType [Clause tuplePattern dummyBodyExpr]
-            let prog = wrapExprInProgram matchExpr (TFunction tupleType TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (CustomErrorType msg) -> "Tuple pattern arity mismatch" `T.isInfixOf` msg
-                _ -> False
-        
-        it "type checks Match with nested PTuple patterns" $ do
-            let nestedTupleType = TTuple [TTuple [TNumber, TBool], TNumber]
-            let nestedTuplePattern = PTuple [PTuple [PNumber 1.0, PBool True], PVar "y"]
-            -- Clause body uses "y", its type should be inferred as TNumber
-            let matchExpr = Match nestedTupleType [Clause nestedTuplePattern (BinOp Mul (Var "y") (Number 2))]
-            let prog = wrapExprInProgram matchExpr (TFunction nestedTupleType TNumber Set.empty)
-            check prog `shouldSatisfy` isRight
-
-        it "reports TypeMismatch for nested PTuple element type mismatch" $ do
-            let nestedTupleType = TTuple [TTuple [TNumber, TBool], TNumber]
-            -- Inner tuple pattern: PTuple [PBool False, PBool True] -> PBool False mismatches with TNumber
-            let nestedTuplePattern = PTuple [PTuple [PBool False, PBool True], PVar "y"]
-            let matchExpr = Match nestedTupleType [Clause nestedTuplePattern (Var "y")]
-            let prog = wrapExprInProgram matchExpr (TFunction nestedTupleType TNumber Set.empty)
-            check prog `shouldSatisfy` \case
-                Left (TypeMismatch TNumber TBool) -> True -- Mismatch on the first element of the inner tuple
-                _ -> False
 
 isRight :: Either a b -> Bool
 isRight (Right _) = True

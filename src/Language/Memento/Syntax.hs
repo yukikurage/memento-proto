@@ -47,6 +47,7 @@ data Type
   | THandler (Type, Effects) (Type, Effects) -- ハンドラ型 (引数の型 & 消費するエフェクト -> 戻り値の型 & 生成するエフェクト)
   | TFunction Type (Type, Effects) -- 関数型 (引数の型  -> 戻り値の型 & 生成するエフェクト)
   | TAlgebraicData Text -- 代数的データ型
+  | TTuple [Type] -- タプル型
   deriving (Show, Eq, Generic)
 
 -- | 式の型
@@ -62,6 +63,7 @@ data Expr
   | Do Text -- do name 構文
   | Match Type [Clause] -- match式 (マッチする型, clauses)
   | Handle Type [HandlerClause] -- ハンドル式 (期待されるハンドラの型 (Function), ハンドラ節)
+  | Tuple [Expr] -- タプルリテラル
   deriving (Show, Eq, Generic)
 
 -- | 二項演算子の型
