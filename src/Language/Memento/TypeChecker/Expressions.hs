@@ -105,24 +105,10 @@ inferType expr = case expr of
     (elseType, elseEff) <- inferType el
     unify thenType elseType
     return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
-  Apply (Lambda name mType body) arg -> do
-    (argType, argEffs) <- inferType arg
-    -- Use argType for the lambda parameter type if no annotation
-    let lambdaParamType = fromMaybe argType mType
-    -- If type annotation exists, it must match the actual argument type
-    unless (isNothing mType || Just argType == mType) $
-      throwError $
-        TypeMismatch (fromMaybe (TAlgebraicData "Any") mType) argType
-
-    (bodyType, bodyEffects) <- withBinding name lambdaParamType $ inferType body
-    return (bodyType, bodyEffects `Set.union` argEffs)
-  Lambda name mType body -> do
-    -- If no type annotation, it's a bit tricky. For now, assume it needs to be inferred or is an error.
-    -- Original code used fromMaybe TNumber mType. This is a default, which might not be ideal.
-    -- Let's stick to it for now to maintain original behavior.
-    let actualParamType = fromMaybe TNumber mType -- Defaulting to TNumber if no annotation
-    (bodyType, bodyEffects) <- withBinding name actualParamType $ inferType body
-    return (TFunction actualParamType (bodyType, bodyEffects), Set.empty)
+  Lambda pattern mArgTypeAnnotation body -> do
+    (bindings, actualPatternType) <- checkLambdaPatternAndGetBindings pattern mArgTypeAnnotation
+    (bodyType, bodyEffects) <- withBindings bindings $ inferType body
+    return (TFunction actualPatternType (bodyType, bodyEffects), Set.empty)
   HandleApply func arg -> do
     (funcType, funcEffs) <- inferType func
     (argType, argEffs) <- inferType arg
@@ -293,22 +279,67 @@ getPatternBindings actualScrutineeType pattern adtCtorMap = case pattern of
           CustomErrorType $
             "Tuple pattern arity mismatch. Expected " <> T.pack (show (length elementTypes)) <> " elements, got " <> T.pack (show (length subPatterns))
       -- Recursively get bindings for sub-patterns
-      listOfBindings <- zipWithM (\p t -> getPatternBindings t p adtCtorMap) subPatterns elementTypes
+      listOfBindings <- zipWithM (\p t -> getPatternBindings t p adtCtorMap) subPatterns elementTypes -- Pass adtCtorMap through
       return $ concat listOfBindings
     _ -> throwError $ TypeMismatch actualScrutineeType (TTuple []) -- Expected a tuple type
   PVar varName -> return [(varName, actualScrutineeType)]
   PWildcard -> return []
   PConstructor patConsName varName -> do
-    -- This pattern only makes sense if the scrutinee is an Algebraic Data Type
     case actualScrutineeType of
-      TAlgebraicData adtName -> do
+      TAlgebraicData adtName -> do -- actualScrutineeType is the expected ADT
         constructorSig <- case Map.lookup patConsName adtCtorMap of
-          Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not found in ADT '" <> adtName <> "' or ADT definition not found for type '" <> T.pack (show actualScrutineeType) <> "'"
+          Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not found in ADT '" <> adtName <> "'."
           Just sig -> return sig
-        -- Ensure the constructor belongs to the scrutinee's ADT type.
-        -- This is implicitly handled if adtCtorMap is correctly populated for the specific adtName.
+        -- Sanity check: the constructor's result type must match the ADT type we are checking against
+        unless (csResultType constructorSig == TAlgebraicData adtName) $
+          throwError $ CustomErrorType $ "Internal error: Constructor '" <> patConsName <> "' from ADT '" <> adtName <> "' has an unexpected result type '" <> T.pack (show (csResultType constructorSig)) <> "'."
         return [(varName, csArgType constructorSig)]
-      _ -> throwError $ TypeMismatch actualScrutineeType (TAlgebraicData "SomeADT") -- Expected an ADT for PConstructor
+      _ -> throwError $ TypeMismatch actualScrutineeType (TAlgebraicData "SomeADT") -- Expected an ADT for PConstructor when matching
+
+-- New helper function for lambda pattern checking
+checkLambdaPatternAndGetBindings :: Pattern -> Maybe Type -> TypeCheck ([(Text, Type)], Type)
+checkLambdaPatternAndGetBindings pattern optAnnotation = case (pattern, optAnnotation) of
+  -- Case 1: Type annotation is provided
+  (p, Just annotatedType) -> do
+    adtEnv <- getAdtEnv
+    -- Determine the relevant ADT constructor map if the annotated type is an ADT
+    let adtCtorMap = case annotatedType of
+          TAlgebraicData adtName -> maybe Map.empty adtConstructors (Map.lookup adtName adtEnv)
+          _ -> Map.empty -- Not an ADT or ADT name not found, so no specific ADT constructors apply
+    -- Use getPatternBindings to check pattern against the annotated type and get bindings
+    bindings <- getPatternBindings annotatedType p adtCtorMap
+    return (bindings, annotatedType)
+
+  -- Case 2: No type annotation (inference - simple cases for now)
+  (PVar varName, Nothing) -> do
+    -- Defaulting to TNumber as per previous behavior for unannotated lambdas (name -> ...)
+    -- This is a simplification and might need refinement for true polymorphic lambdas.
+    let inferredType = TNumber
+    return ([(varName, inferredType)], inferredType)
+  (PWildcard, Nothing) -> do
+    let inferredType = TNumber -- Similar default for wildcard
+    return ([], inferredType)
+  (PNumber _, Nothing) -> return ([], TNumber)
+  (PBool _, Nothing) -> return ([], TBool)
+  (PTuple subPatterns, Nothing) -> do
+    -- Recursively infer for sub-patterns
+    results <- mapM (`checkLambdaPatternAndGetBindings` Nothing) subPatterns
+    let bindings = concatMap fst results
+    let types = map snd results
+    return (bindings, TTuple types)
+  (PConstructor ctorName varName, Nothing) -> do
+    -- Infer from global constructor environment
+    env <- getEnv -- This env contains variable types and constructor types
+    case Map.lookup ctorName env of
+      Just (TFunction argType (resultType@(TAlgebraicData _), _)) -> do
+        -- Ensure resultType is indeed TAlgebraicData, which it should be for constructors
+        return ([(varName, argType)], resultType)
+      Just otherType -> throwError $ CustomErrorType $ "Expected constructor '" <> ctorName <> "' to have a function type, but got " <> T.pack (show otherType)
+      Nothing -> throwError $ CustomErrorType $ "Constructor '" <> ctorName <> "' not found in environment for inference."
+
+  -- Catch-all for complex patterns without annotation (e.g. PConstructor inside PTuple without annotation)
+  -- This could be refined, but for now, require annotations for more complex unannotated patterns.
+  (p, Nothing) -> throwError $ CannotInferType (Lambda p optAnnotation (Var "dummy")) -- Dummy expr
 
 -- Helper for Match clause processing
 processClause :: Map.Map Text ConstructorSignature -> Type -> (Maybe Type, Effects) -> Clause -> TypeCheck (Maybe Type, Effects)
