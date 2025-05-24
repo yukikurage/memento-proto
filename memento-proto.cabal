@@ -26,9 +26,21 @@ source-repository head
 library
   exposed-modules:
     Language.Memento.Codegen
+    Language.Memento.Codegen.Base
+    Language.Memento.Codegen.Definitions
+    Language.Memento.Codegen.Expressions
     Language.Memento.Parser
+    Language.Memento.Parser.Core
+    Language.Memento.Parser.Definitions
+    Language.Memento.Parser.Expressions
+    Language.Memento.Parser.Patterns
+    Language.Memento.Parser.Types
     Language.Memento.Syntax
     Language.Memento.TypeChecker
+    Language.Memento.TypeChecker.Expressions
+    Language.Memento.TypeChecker.Monad
+    Language.Memento.TypeChecker.Registration
+    Language.Memento.TypeChecker.Types
     Main
   other-modules:
     Paths_memento_proto

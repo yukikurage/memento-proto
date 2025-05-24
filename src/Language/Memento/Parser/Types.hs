@@ -6,13 +6,13 @@ module Language.Memento.Parser.Types (
   functionTypeSuffixParser,
   handlerTypeSuffixParser,
   typeExpr,
-  typeAnnotation
+  typeAnnotation,
 ) where
 
 import qualified Data.Set as Set
 import Data.Text (Text)
-import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 import Language.Memento.Parser.Core
+import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 

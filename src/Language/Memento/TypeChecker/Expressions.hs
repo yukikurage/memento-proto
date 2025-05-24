@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-} -- May be needed for some existing logic, e.g. in Match or Handle
+-- May be needed for some existing logic, e.g. in Match or Handle
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Memento.TypeChecker.Expressions (
   inferType,
@@ -8,7 +9,7 @@ module Language.Memento.TypeChecker.Expressions (
   collectOpSigs, -- Exporting as it's used by inferType for Handle, but complex enough
   partitionHandlerClauses, -- Exporting as it's used by inferType for Handle
   processReturnClauses, -- Exporting as it's used by inferType for Handle
-  processOpClauses -- Exporting as it's used by inferType for Handle
+  processOpClauses, -- Exporting as it's used by inferType for Handle
 ) where
 
 import Control.Monad (foldM, unless, when)
@@ -40,22 +41,22 @@ processOpClauses :: Map.Map Text OperatorSignature -> [HandlerClause] -> Type ->
 processOpClauses _ [] _ _ = return () -- No op clauses to process
 processOpClauses operatorSigsMap clauses targetBodyType targetBodyEffects = do
   mapM_ processSingleOpClause clauses
-  where
-    processSingleOpClause (HandlerClause opName argVarName contVarName bodyExpr) = do
-      opSig <- case Map.lookup opName operatorSigsMap of
-        Just sig -> return sig
-        Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects (should be caught by exhaustiveness check)."
+ where
+  processSingleOpClause (HandlerClause opName argVarName contVarName bodyExpr) = do
+    opSig <- case Map.lookup opName operatorSigsMap of
+      Just sig -> return sig
+      Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects (should be caught by exhaustiveness check)."
 
-      let contType = TFunction (osRetType opSig) (targetBodyType, targetBodyEffects)
-      (currentOpClauseBodyType, currentOpClauseBodyEffects) <-
-        withBindings [(argVarName, osArgType opSig), (contVarName, contType)] $ inferType bodyExpr
+    let contType = TFunction (osRetType opSig) (targetBodyType, targetBodyEffects)
+    (currentOpClauseBodyType, currentOpClauseBodyEffects) <-
+      withBindings [(argVarName, osArgType opSig), (contVarName, contType)] $ inferType bodyExpr
 
-      unify targetBodyType currentOpClauseBodyType
-      unless (currentOpClauseBodyEffects `Set.isSubsetOf` targetBodyEffects) $
-        throwError $ EffectMismatch targetBodyEffects currentOpClauseBodyEffects -- Corrected order
-    processSingleOpClause (HandlerReturnClause _ _) =
-      throwError $ CustomErrorType "Internal error: processOpClauses received a HandlerReturnClause."
-
+    unify targetBodyType currentOpClauseBodyType
+    unless (currentOpClauseBodyEffects `Set.isSubsetOf` targetBodyEffects) $
+      throwError $
+        EffectMismatch targetBodyEffects currentOpClauseBodyEffects -- Corrected order
+  processSingleOpClause (HandlerReturnClause _ _) =
+    throwError $ CustomErrorType "Internal error: processOpClauses received a HandlerReturnClause."
 
 -- | Helper: Collect operator signatures for handled effects
 collectOpSigs :: Map.Map Text EffectInfo -> Map.Map Text OperatorSignature -> Text -> TypeCheck (Map.Map Text OperatorSignature)
@@ -64,8 +65,13 @@ collectOpSigs effectEnv accSigs effectName = do
     Just ei -> return ei
     Nothing -> throwError $ CustomErrorType $ "Undefined effect referenced in handle: " <> effectName
   let currentEffectOps = eiOps effectInfo
-  mapM_ (\opN -> when (Map.member opN accSigs) $
-    throwError $ CustomErrorType $ "Duplicate operator name '" <> opN <> "' found across handled effects.")
+  mapM_
+    ( \opN ->
+        when (Map.member opN accSigs) $
+          throwError $
+            CustomErrorType $
+              "Duplicate operator name '" <> opN <> "' found across handled effects."
+    )
     (Map.keys currentEffectOps)
   return $ Map.union accSigs currentEffectOps
 
@@ -105,7 +111,8 @@ inferType expr = case expr of
     let lambdaParamType = fromMaybe argType mType
     -- If type annotation exists, it must match the actual argument type
     unless (isNothing mType || Just argType == mType) $
-        throwError $ TypeMismatch (fromMaybe (TAlgebraicData "Any") mType) argType
+      throwError $
+        TypeMismatch (fromMaybe (TAlgebraicData "Any") mType) argType
 
     (bodyType, bodyEffects) <- withBinding name lambdaParamType $ inferType body
     return (bodyType, bodyEffects `Set.union` argEffs)
@@ -140,7 +147,8 @@ inferType expr = case expr of
       Just (OperatorSignature{osArgType = paramT, osRetType = retT, osEffectName = effectName}) -> do
         return (TFunction paramT (retT, Set.singleton (Effect effectName)), Set.empty)
       Nothing -> throwError $ UndefinedEffect name
-  Match scrutineeType clauses -> do -- Scrutinee is Type as per parser and Syntax.hs
+  Match scrutineeType clauses -> do
+    -- Scrutinee is Type as per parser and Syntax.hs
     adtEnv <- getAdtEnv
     scrutineeName <- case scrutineeType of -- Now scrutineeType is a Type
       TAlgebraicData name -> return name
@@ -152,7 +160,8 @@ inferType expr = case expr of
     let adtConstructorsMap = adtConstructors adtInfo
 
     when (null clauses) $
-      throwError $ CustomErrorType "Match expression cannot have empty clauses"
+      throwError $
+        CustomErrorType "Match expression cannot have empty clauses"
 
     (firstBranchTypeOpt, totalClauseEffects) <- foldM (processClause adtConstructorsMap scrutineeType) (Nothing, Set.empty) clauses
 
@@ -173,13 +182,13 @@ inferType expr = case expr of
     unless hasWildcardOrVar $ do
       let allAdtConstructors = Map.keysSet adtConstructorsMap
       unless (allAdtConstructors `Set.isSubsetOf` coveredConstructors) $
-        throwError $ CustomErrorType $
+        throwError $
+          CustomErrorType $
             "Pattern matching is not exhaustive for ADT '" <> scrutineeName <> "'. Missing: " <> T.pack (show (Set.toList (allAdtConstructors `Set.difference` coveredConstructors)))
 
     -- The type of a Match expression is TFunction ScrutineeType BranchType.
     -- This seems to be the convention in the original code.
     return (TFunction scrutineeType (finalMatchExprType, totalClauseEffects), Set.empty)
-
   Handle handlerType handlerClauses -> do
     effectEnv <- getEffectEnv
     ((argType, argEffects), (retType, retEffects)) <- extractHandlerType handlerType
@@ -188,24 +197,25 @@ inferType expr = case expr of
 
     let (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
     when (null returnClauses) $
-      throwError $ CustomErrorType "Handle expression must have at least one return clause."
+      throwError $
+        CustomErrorType "Handle expression must have at least one return clause."
     when (length returnClauses > 1) $
-      throwError $ CustomErrorType "Handle expression cannot have more than one return clause."
-
+      throwError $
+        CustomErrorType "Handle expression cannot have more than one return clause."
 
     (targetBodyType, returnClausesEffects) <- processReturnClauses argType returnClauses
 
     -- Process operator clauses, ensuring their bodies unify with targetBodyType and effects are subsets of returnClausesEffects
     processOpClauses operatorSigsMap opClauses targetBodyType returnClausesEffects
 
-
     -- Exhaustiveness Check for Handle
     handledOperatorsInClauses <- foldM (checkOpClauseExhaustiveness operatorSigsMap) Set.empty opClauses
     let allOperatorsInHandledEffects = Map.keysSet operatorSigsMap
     unless (allOperatorsInHandledEffects `Set.isSubsetOf` handledOperatorsInClauses) $
-      throwError $ CustomErrorType $
-        "Handle expression is not exhaustive. Missing handlers for operators: "
-        <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
+      throwError $
+        CustomErrorType $
+          "Handle expression is not exhaustive. Missing handlers for operators: "
+            <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
 
     return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
 
@@ -213,18 +223,12 @@ inferType expr = case expr of
 processClause :: Map.Map Text ConstructorSignature -> Type -> (Maybe Type, Effects) -> Clause -> TypeCheck (Maybe Type, Effects)
 processClause adtConstructorsMap scrutineeType (firstBranchTypeOpt, accClauseEffects) (Clause pattern branchExpr) = do
   localBindings <- case pattern of
-    PConstructor patConsName varNames -> do
+    PConstructor patConsName varName -> do
       constructorSig <- case Map.lookup patConsName adtConstructorsMap of
         Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not part of ADT '" <> T.pack (show scrutineeType) <> "'"
         Just sig -> return sig
-      
-      let expectedNumVars = countConstructorArgs (csArgType constructorSig) (csResultType constructorSig)
-      unless (length varNames == expectedNumVars) $
-          throwError $ CustomErrorType $ "Pattern arity mismatch for constructor '" <> patConsName <> "'. Expected " <> T.pack (show expectedNumVars) <> " args, got " <> T.pack (show (length varNames)) <> ". Constructor type: " <> T.pack (show (ConstructorDef patConsName (buildConstructorType (csArgType constructorSig) (csResultType constructorSig))))
-      
-      let argTypes = getConstructorArgTypes (csArgType constructorSig) (csResultType constructorSig)
-      return $ zip varNames argTypes
 
+      return [(varName, csArgType constructorSig)]
     PVar varName -> return [(varName, scrutineeType)] -- Bind var to the type of the scrutinee
     PWildcard -> return []
 
@@ -238,31 +242,16 @@ processClause adtConstructorsMap scrutineeType (firstBranchTypeOpt, accClauseEff
 
   return (newFirstBranchTypeOpt, accClauseEffects `Set.union` currentBranchExprEffects)
 
--- Helper to count expected variables for a constructor pattern based on its type
-countConstructorArgs :: Type -> Type -> Int
-countConstructorArgs constructorArgType resultType = go constructorArgType 0
-  where
-    go (TFunction argT (retT, _)) acc =
-        if retT == resultType then acc + 1 -- Last argument before result type
-        else go retT (acc + 1) -- Argument in a curried function
-    go _ acc = acc -- Not a function type, or resultType reached unexpectedly
-
--- Helper to get types of arguments for a constructor pattern
-getConstructorArgTypes :: Type -> Type -> [Type]
-getConstructorArgTypes constructorArgType resultType = go constructorArgType []
-  where
-    go (TFunction argT (retT, _)) acc =
-        if retT == resultType then reverse (argT : acc)
-        else go retT (argT : acc)
-    go t acc = reverse acc -- Should ideally be an error if t is not resultType here and acc is empty for non-nullary.
-
-
 -- Helper for Handle exhaustiveness check
 checkOpClauseExhaustiveness :: Map.Map Text OperatorSignature -> Set.Set Text -> HandlerClause -> TypeCheck (Set.Set Text)
 checkOpClauseExhaustiveness operatorSigsMap acc (HandlerClause opName _ _ _) = do
   when (Set.member opName acc) $
-    throwError $ CustomErrorType $ "Duplicate operator '" <> opName <> "' in handle clauses."
+    throwError $
+      CustomErrorType $
+        "Duplicate operator '" <> opName <> "' in handle clauses."
   unless (Map.member opName operatorSigsMap) $
-    throwError $ CustomErrorType $ "Operator '" <> opName <> "' in handle clause is not part of the handled effects."
+    throwError $
+      CustomErrorType $
+        "Operator '" <> opName <> "' in handle clause is not part of the handled effects."
   return $ Set.insert opName acc
 checkOpClauseExhaustiveness _ acc (HandlerReturnClause _ _) = return acc -- Return clauses don't count towards op exhaustiveness

@@ -10,7 +10,7 @@ module Language.Memento.Parser.Core (
   number,
   rword,
   reservedWords,
-  identifier
+  identifier,
 ) where
 
 import Control.Monad.Combinators.Expr

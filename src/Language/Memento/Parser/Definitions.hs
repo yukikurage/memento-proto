@@ -6,13 +6,13 @@ module Language.Memento.Parser.Definitions (
   dataDefinitionParser,
   effectDefinitionParser,
   valDefinitionParser,
-  definitionParser
+  definitionParser,
 ) where
 
-import Language.Memento.Syntax (Definition (..), ConstructorDef (..), OperatorDef (..))
 import Language.Memento.Parser.Core
-import Language.Memento.Parser.Types (typeExpr, typeAnnotation)
 import Language.Memento.Parser.Expressions (expr)
+import Language.Memento.Parser.Types (typeAnnotation, typeExpr)
+import Language.Memento.Syntax (ConstructorDef (..), Definition (..), OperatorDef (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 
@@ -75,6 +75,6 @@ definitionParser =
   lexeme $
     choice
       [ try valDefinitionParser
-      , try dataDefinitionParser 
+      , try dataDefinitionParser
       , try effectDefinitionParser
       ]

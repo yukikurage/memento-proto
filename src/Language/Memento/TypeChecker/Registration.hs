@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-} -- May be needed for some existing logic
+-- May be needed for some existing logic
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Memento.TypeChecker.Registration (
   registerAdtsAndConstructors,
-  registerEffects
+  registerEffects,
 ) where
 
 import Control.Monad (foldM, forM_, unless, when)
@@ -13,7 +14,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Memento.Syntax (Definition (..), ConstructorDef (..), OperatorDef (..), Effect (..), Type (..), TypeError (..))
+import Language.Memento.Syntax (ConstructorDef (..), Definition (..), Effect (..), OperatorDef (..), Type (..), TypeError (..))
 import Language.Memento.TypeChecker.Monad
 import Language.Memento.TypeChecker.Types
 
@@ -44,13 +45,11 @@ registerAdtsAndConstructors definitions = do
 
     addAdtInfo adtName (AdtInfo{adtName = adtName, adtConstructors = Map.empty}) -- Placeholder for recursive resolution
   preRegisterAdtName _ _ = return () -- Should not be called with ValDef
-
   processAdtDefinition :: Definition -> TypeCheck ()
   processAdtDefinition (DataDef adtName consDefs) = do
     finalConstructorMap <- foldM (buildAndRegisterConstructor adtName) Map.empty consDefs
     modify $ \st -> st{tsAdtEnv = Map.adjust (\info -> info{adtConstructors = finalConstructorMap}) adtName (tsAdtEnv st)}
   processAdtDefinition _ = return () -- Skip ValDefs
-
   buildAndRegisterConstructor :: Text -> Map.Map Text ConstructorSignature -> ConstructorDef -> TypeCheck (Map.Map Text ConstructorSignature)
   buildAndRegisterConstructor adtName accumulatedConstructors (ConstructorDef consNameText typ) = do
     env <- getEnv
@@ -107,9 +106,14 @@ registerEffects definitions = do
     unless (finalRetEffects == Set.singleton (Effect effectName)) $
       throwError $
         CustomErrorType $
-          "Operator '" <> opName <> "' in effect '" <> effectName <> "' has effects: " <> T.pack (show finalRetEffects)
-          <> ". Expected: " <> T.pack (show (Set.singleton (Effect effectName)))
-
+          "Operator '"
+            <> opName
+            <> "' in effect '"
+            <> effectName
+            <> "' has effects: "
+            <> T.pack (show finalRetEffects)
+            <> ". Expected: "
+            <> T.pack (show (Set.singleton (Effect effectName)))
 
     when (Map.member opName accumulatedOpSigs) $
       throwError $

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 -- ScopedTypeVariables might not be needed here anymore
 
 module Language.Memento.TypeChecker (
@@ -6,9 +7,9 @@ module Language.Memento.TypeChecker (
   typeCheckProgram, -- For whole programs
   TypeError (..), -- Re-export from Syntax, but commonly associated with TypeChecker
   module Language.Memento.TypeChecker.Monad, -- Re-exporting Monad types/functions
-  module Language.Memento.TypeChecker.Types,  -- Re-exporting common types/signatures
+  module Language.Memento.TypeChecker.Types, -- Re-exporting common types/signatures
   module Language.Memento.TypeChecker.Registration,
-  module Language.Memento.TypeChecker.Expressions
+  module Language.Memento.TypeChecker.Expressions,
 )
 where
 
@@ -21,14 +22,16 @@ import qualified Data.Set as Set -- Still needed for typeCheckProgram's inferred
 import Data.Text (Text)
 import qualified Data.Text as T -- Still needed for typeCheckProgram's error messages
 
+import Debug.Trace (traceM)
 import Language.Memento.Syntax (Definition (..), Effects, Expr (..), Program (..), Type (..), TypeError (..))
-import Language.Memento.TypeChecker.Monad
-import Language.Memento.TypeChecker.Types
-import Language.Memento.TypeChecker.Registration
 import Language.Memento.TypeChecker.Expressions
+import Language.Memento.TypeChecker.Monad
+import Language.Memento.TypeChecker.Registration
+import Language.Memento.TypeChecker.Types
 
--- | Type check a single expression (e.g., for testing or REPL)
--- This function is simplified as tsEffects is not part of TypeState for accumulation here.
+{- | Type check a single expression (e.g., for testing or REPL)
+This function is simplified as tsEffects is not part of TypeState for accumulation here.
+-}
 typeCheck :: Expr -> Either TypeError (Type, Effects)
 typeCheck expr = evalState (runExceptT (inferType expr)) initialState
 
@@ -40,6 +43,16 @@ typeCheckProgram (Program definitions) = evalState (runExceptT go) initialState
   go = do
     -- Pass 1: Register ADTs and their constructors
     registerAdtsAndConstructors definitions
+
+    traceM "Pass 1: Register ADTs and their constructors"
+    tsEnv <- getEnv
+    traceM $ "tsEnv: " <> show tsEnv
+    tsAdtEnv <- getAdtEnv
+    traceM $ "tsAdtEnv: " <> show tsAdtEnv
+    tsOperatorEnv <- getOperatorEnv
+    traceM $ "tsOperatorEnv: " <> show tsOperatorEnv
+    tsEffectEnv <- getEffectEnv
+    traceM $ "tsEffectEnv: " <> show tsEffectEnv
 
     -- Pass 2: Register Effects and their operator signatures
     registerEffects definitions
@@ -55,7 +68,6 @@ typeCheckProgram (Program definitions) = evalState (runExceptT go) initialState
     -- addBinding/withBinding are for single/scoped additions. For a bulk update like this, direct state modification is typical.
     -- Let's check if `tsEnv` is exported from `TypeState` in `Monad.hs`. It is.
     modify $ \st -> st{tsEnv = combinedEnv}
-
 
     -- Check ValDef bodies
     checkedValDefsData <- foldM checkValDefBody [] definitions

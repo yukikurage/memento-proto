@@ -8,16 +8,18 @@ module Language.Memento.Parser.Expressions (
   doExpr,
   matchExprParser,
   handlerExprParser,
-  operatorTable -- Exported for use in Patterns if ever needed, though likely not.
+  operatorTable, -- Exported for use in Patterns if ever needed, though likely not.
 ) where
 
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
-import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
 import Language.Memento.Parser.Core
-import Language.Memento.Parser.Types (typeExpr, typeTerm) -- Assuming typeTerm is needed by matchExprParser via term
-import Language.Memento.Parser.Patterns (patternParser, clauseParser) -- clauseParser for matchExprParser
+
+-- Assuming typeTerm is needed by matchExprParser via term
+import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
+import Language.Memento.Parser.Types (typeExpr, typeTerm)
+import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if still needed
@@ -94,37 +96,9 @@ doExpr = (lexeme . try) $ do
 matchExprParser :: Parser Expr
 matchExprParser = lexeme $ do
   rword "branch"
-  -- Scrutinee in grammar was typeTerm, which means it's a simple type name or parenthesized type expr.
-  -- However, the AST for Match stores a Type, which is correct as per Syntax.hs: `Match Type [Clause]`
-  -- The original `typeTerm` here was likely meant to parse an *expression* that results in an ADT.
-  -- Let's assume it's an expression, consistent with typical match forms.
-  -- So, we'll use `term` or even `expr` for the scrutinee.
-  -- Given `term` is used for `if` conditions, using `term` here seems consistent.
-  scrutineeExpr <- term -- Parses an expression, not a type.
-  
-  -- The AST `Match Type [Clause]` seems to expect the *type* of the scrutinee, not the scrutinee expression itself.
-  -- This is unusual. Typically, a match expression is `Match Expr [Clause]`.
-  -- Let's stick to the original `typeTerm` for now as per `Parser.hs` and see how it's handled in TypeChecker.
-  -- If `typeTerm` is indeed for parsing a type literal (e.g. `MyADT`), that's what will be stored.
-  -- The TypeChecker.hs analysis showed `Match scrutinee clauses` where `scrutinee` was an `Expr`,
-  -- and then its type was inferred.
-  -- `Match scrutinee clauses -> do adtEnv <- getAdtEnv; scrutineeName <- case scrutinee of TAlgebraicData name -> return name`
-  -- This implies the parser *should* be parsing an expression for the scrutinee.
-  -- The `Match` node in `Syntax.hs` is `Match Type [Clause]`. This is a mismatch.
-  -- For now, I will assume the parser should parse an *expression* as the scrutinee.
-  -- And the `Match` node in Syntax.hs should be `Match Expr [Clause]`.
-  -- This is a significant change that should be part of the "Consistency" step later,
-  -- but we have to make a choice for the parser now.
-  -- Let's assume `Syntax.hs` will be changed. So, parse an `Expr`.
-  -- EDIT: The issue description asks for refactoring existing code, not redesigning it.
-  -- The original parser had `scrutinee <- typeTerm` for `matchExprParser`.
-  -- The `Syntax.hs` has `Match Type [Clause]`. This is what the original TypeChecker was expecting for `Match`.
-  -- I will revert to parsing `Type` for the first argument of `Match`.
   scrutineeType <- typeTerm -- This parses a Type literal.
-  
-  clauses <- brackets (sepBy (try clauseParser) (symbol ",")) -- List of clauses
+  clauses <- brackets (sepBy (try (clauseParser expr)) (symbol ",")) -- Pass expr to clauseParser
   return $ Match scrutineeType clauses
-
 
 {- | ハンドラ節のパーサー
 例:
@@ -174,8 +148,8 @@ term =
     [ try $ parens expr -- Recursive call to expr
     , try lambdaExpr
     , try doExpr
-    , try matchExprParser 
-    , try handlerExprParser 
+    , try matchExprParser
+    , try handlerExprParser
     , ifExpr
     , Var <$> identifier
     , Number <$> number

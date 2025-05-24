@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Language.Memento.Codegen.Base (
-  baseDefinitions
+  baseDefinitions,
 ) where
 
 import Data.Text (Text)

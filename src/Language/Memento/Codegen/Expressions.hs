@@ -7,7 +7,7 @@ module Language.Memento.Codegen.Expressions (
   generateClause,
   generatePattern,
   generateBindings,
-  partitionHandlerClausesForCodegen -- Renamed to avoid conflict if Syntax.partitionHandlerClauses is different
+  partitionHandlerClausesForCodegen, -- Renamed to avoid conflict if Syntax.partitionHandlerClauses is different
 ) where
 
 import qualified Data.Text as T
@@ -23,12 +23,11 @@ partitionHandlerClausesForCodegen clauses = go clauses ([], [])
     HandlerReturnClause{} -> go cs (ops, rets ++ [c])
 
 generatePattern :: T.Text -> Pattern -> (T.Text, [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
-generatePattern scrutineeExpr (PConstructor consName varNames) =
-  let tagCheck = T.concat [scrutineeExpr, T.pack "[0] === "", consName, T.pack """]
-      arity = length varNames
-      arityCheck = T.concat [scrutineeExpr, T.pack ".length === ", T.pack (show (arity + 1))]
+generatePattern scrutineeExpr (PConstructor consName varName) =
+  let tagCheck = T.concat [scrutineeExpr, T.pack "[0] === \"", consName, T.pack "\""]
+      arityCheck = T.concat [scrutineeExpr, T.pack ".length === 2"]
       fullCondition = T.concat [tagCheck, T.pack " && ", arityCheck]
-      bindings = map (\(i, varName) -> (varName, T.concat [scrutineeExpr, T.pack "[", T.pack (show (i + 1)), T.pack "]"])) (zip [0 ..] varNames)
+      bindings = [(varName, T.concat [scrutineeExpr, T.pack "[1]"])]
    in (fullCondition, bindings)
 generatePattern scrutineeExpr (PVar varName) =
   (T.pack "true", [(varName, scrutineeExpr)])
@@ -102,12 +101,13 @@ generateExpr = \case
           , ", (f) => f(v)))"
           ]
   Do name ->
-    T.concat ["ret((v) => ["op", "", name, "", v, (v) => ret(v)])"]
-  Match adtType clauses -> -- adtType is Type from Syntax.hs
+    T.concat ["ret((v) => [\"op\", \"", name, "\", v, (v) => ret(v)])"]
+  Match adtType clauses ->
+    -- adtType is Type from Syntax.hs
     let matchArg = "_matched_val_"
         generatedClauses = map (generateClause matchArg) clauses
         -- Use T.pack (show adtType) for error message
-        fallbackLogic = T.concat ["console.error('Non-exhaustive patterns for ", T.pack (show adtType), "' with value:', ", T.pack matchArg, "); ", "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value for ", T.pack (show adtType), "');"]
+        fallbackLogic = T.concat ["console.error('Non-exhaustive patterns for ", T.pack (show adtType), " with value: ', ", T.pack matchArg, "); ", "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value for ", T.pack (show adtType), "');"]
      in T.unlines
           [ T.pack "ret((" <> T.pack matchArg <> T.pack ") => {"
           , T.pack "  let _result;"
@@ -130,7 +130,8 @@ generateExpr = \case
           , T.pack "  return _result;"
           , T.pack "})"
           ]
-  Handle _ handlerClauses -> -- First arg of Handle is Type, ignored in codegen
+  Handle _ handlerClauses ->
+    -- First arg of Handle is Type, ignored in codegen
     let (opClauses, returnClauses) = partitionHandlerClausesForCodegen handlerClauses
         returnClauseJs = case returnClauses of
           (HandlerReturnClause retVar bodyExpr : _) ->
@@ -139,19 +140,17 @@ generateExpr = \case
                   [ "    const " <> retVar <> " = _handled_val_[1];"
                   , "    return " <> bodyJs <> ";"
                   ]
-          _ -> "// Should be caught by type checker: No return clause found
-    return ["op", "error", "No return clause", (v) => ret(v)];"
+          _ -> "// Should be caught by type checker: No return clause found\n"
         opClausesJs =
           if null opClauses
-            then T.pack "      // No operator clauses
-"
+            then T.pack "      // No operator clauses\n"
             else
               T.concat $
                 map
                   ( \(HandlerClause opName argVar contVar bodyExpr) ->
                       let bodyJs = generateExpr bodyExpr
                        in T.unlines
-                            [ "      if (_op_name_ === "" <> opName <> "") {"
+                            [ T.concat ["      if (_op_name_ === \"", opName, "\") {"]
                             , "        const " <> argVar <> " = _op_arg_;"
                             , "        const " <> contVar <> " = _op_cont_;"
                             , "        return " <> bodyJs <> ";"
@@ -159,12 +158,10 @@ generateExpr = \case
                             ]
                   )
                   opClauses
-        defaultOpCaseJs = "      else {
-        return ["op", _op_name_, _op_arg_, _op_cont_];
-      }"
+        defaultOpCaseJs = "      else {\n        return [\"op\", _op_name_, _op_arg_, _op_cont_];\n      }"
      in T.unlines
           [ "ret(function _handle_(_handled_val_){"
-          , "  if (_handled_val_[0] === "ret") {"
+          , "  if (_handled_val_[0] === \"ret\") {"
           , returnClauseJs
           , "  } else { // Operation"
           , "    const _op_name_ = _handled_val_[1];"

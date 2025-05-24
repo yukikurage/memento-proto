@@ -2,12 +2,11 @@
 
 module Language.Memento.Parser.Patterns (
   patternParser,
-  clauseParser
+  clauseParser,
 ) where
 
-import Language.Memento.Syntax (Pattern (..), Clause (..))
 import Language.Memento.Parser.Core
-import Language.Memento.Parser.Expressions (expr)
+import Language.Memento.Syntax (Clause (..), Expr, Pattern (..))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 
@@ -19,8 +18,8 @@ patternParser =
       [ -- コンストラクタパターン: (ConstructorName var1 var2 ...)
         try $ do
           constructorName <- identifier
-          varNames <- many identifier -- Zero or more variable names
-          return $ PConstructor constructorName varNames
+          varName <- identifier -- Zero or more variable names
+          return $ PConstructor constructorName varName
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
       , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
@@ -30,9 +29,9 @@ patternParser =
 {- | match節のパーサー
 例: (Cons x xs) -> x
 -}
-clauseParser :: Parser Clause
-clauseParser = lexeme $ do
+clauseParser :: Parser Expr -> Parser Clause
+clauseParser exprParser = lexeme $ do
   pat <- parens patternParser -- Pattern enclosed in parentheses
   symbol "->"
-  ex <- expr -- Depends on expr from Language.Memento.Parser.Expressions
+  ex <- exprParser -- Use the passed parser
   return $ Clause pat ex
