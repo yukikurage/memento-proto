@@ -81,9 +81,6 @@ test-suite memento-proto-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-    CodegenSpec
-    ParserSpec
-    TypeCheckerSpec
     Paths_memento_proto
   hs-source-dirs:
     test
