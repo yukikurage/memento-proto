@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 module TypeCheckerSpec (spec) where
 
 import Test.Hspec

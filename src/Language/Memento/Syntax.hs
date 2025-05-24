@@ -82,6 +82,9 @@ data Pattern
   = PConstructor Text Text -- コンストラクタパターン (コンストラクタ名, 変数名)
   | PVar Text -- 変数パターン (変数名)
   | PWildcard -- ワイルドカードパターン (_)
+  | PNumber Double -- 数値パターン
+  | PBool Bool -- 真偽値パターン
+  | PTuple [Pattern] -- タプルパターン
   deriving (Show, Eq, Generic)
 
 -- | match式の節の定義

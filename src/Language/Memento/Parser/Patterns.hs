@@ -15,14 +15,26 @@ patternParser :: Parser Pattern
 patternParser =
   lexeme $
     choice
-      [ -- コンストラクタパターン: (ConstructorName var1 var2 ...)
+      [ try (PNumber <$> number) -- 数値パターン
+      , try (PBool True <$ symbol "true") -- trueパターン
+      , try (PBool False <$ symbol "false") -- falseパターン
+      , -- タプルパターン: [p1, p2, ...]
+        try $ PTuple <$> brackets (patternParser `sepBy` symbol ",")
+      , -- コンストラクタパターン: ConstructorName varName
+        -- Note: Original PConstructor was `identifier >> identifier`.
+        -- This implies a constructor name followed by a single variable name.
+        -- For example, `Just x` or `Cons y`. If it's a nullary constructor
+        -- like `Nothing`, it might be intended to be `PConstructor "Nothing" "someImplicitOrIgnoredVar"`.
+        -- Or, more likely, for nullary constructors, it should be `PConstructor "Nothing" ""`,
+        -- or the PConstructor type/parsing should be more flexible.
+        -- For now, sticking to the existing structure for PConstructor.
         try $ do
           constructorName <- identifier
-          varName <- identifier -- Zero or more variable names
+          varName <- identifier
           return $ PConstructor constructorName varName
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
-      , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
+      , -- 変数パターン: varName (must come after others to avoid ambiguity)
         PVar <$> identifier
       ]
 

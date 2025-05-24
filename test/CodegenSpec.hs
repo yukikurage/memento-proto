@@ -65,3 +65,83 @@ spec = describe "Codegen" $ do
 -- 2. If it's correct, subsequent test runs will compare against it.
 -- 3. If the Memento compiler's JS output changes for this file, the test will fail,
 --    and you'll need to update the golden file (potentially by deleting it and re-running to regenerate).
+
+    describe "Match Expression Codegen with New Patterns" $ do
+        -- Helper to create a simple program with one ValDef "main" for a Match expression
+        let createMatchProgram matchScrutineeType clauses expectedResultType =
+                Program [ValDef "main" (TFunction matchScrutineeType expectedResultType Set.empty) (Match matchScrutineeType clauses)]
+
+        it "generates correct JS for PNumber pattern" $ do
+            let prog = createMatchProgram TNumber
+                    [ Clause (PNumber 123.0) (Number 1)
+                    , Clause PWildcard (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            -- Check for the condition and the overall structure
+            js `shouldContain` "_matched_val_ === 123"
+            js `shouldContain` "if (_matched_val_ === 123)"
+            -- We can't easily test execution here without a JS runner,
+            -- so we check for key parts of the generated code.
+
+        it "generates correct JS for PBool true pattern" $ do
+            let prog = createMatchProgram TBool
+                    [ Clause (PBool True) (Number 1)
+                    , Clause (PBool False) (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            js `shouldContain` "_matched_val_ === true"
+            js `shouldContain` "if (_matched_val_ === true)"
+            js `shouldContain` "else if (_matched_val_ === false)"
+
+        it "generates correct JS for PTuple pattern with literals" $ do
+            let tupleType = TTuple [TNumber, TBool]
+            let tuplePattern = PTuple [PNumber 42.0, PBool True]
+            let prog = createMatchProgram tupleType
+                    [ Clause tuplePattern (Number 1)
+                    , Clause PWildcard (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            js `shouldContain` "Array.isArray(_matched_val_) && _matched_val_.length === 2 && _matched_val_[0] === 42 && _matched_val_[1] === true"
+
+        it "generates correct JS for PTuple pattern with PVar binding" $ do
+            let tupleType = TTuple [TNumber, TBool]
+            let tuplePattern = PTuple [PVar "x", PBool True]
+            -- Uses 'x' in the body, expecting it to be bound to _matched_val_[0]
+            let prog = createMatchProgram tupleType
+                    [ Clause tuplePattern (Var "x") 
+                    , Clause PWildcard (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            -- Condition for PVar is "true", so it's part of the larger tuple condition
+            js `shouldContain` "Array.isArray(_matched_val_) && _matched_val_.length === 2 && true && _matched_val_[1] === true"
+            js `shouldContain` "const x = _matched_val_[0];"
+            -- The body `generateExpr (Var "x")` will produce `ret(x)`.
+            js `shouldContain` "_result = ret(x);"
+
+
+        it "generates correct JS for PTuple pattern with PWildcard" $ do
+            let tupleType = TTuple [TNumber, TBool]
+            let tuplePattern = PTuple [PWildcard, PBool False]
+            let prog = createMatchProgram tupleType
+                    [ Clause tuplePattern (Number 1)
+                    , Clause PWildcard (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            -- Condition for PWildcard is "true"
+            js `shouldContain` "Array.isArray(_matched_val_) && _matched_val_.length === 2 && true && _matched_val_[1] === false"
+
+        it "generates correct JS for nested PTuple patterns" $ do
+            let nestedTupleType = TTuple [TTuple [TNumber, TBool], TNumber]
+            let nestedTuplePattern = PTuple [PTuple [PNumber 1.0, PBool True], PVar "y"]
+            let prog = createMatchProgram nestedTupleType
+                    [ Clause nestedTuplePattern (Var "y")
+                    , Clause PWildcard (Number 0)
+                    ] TNumber
+            let js = generateJS prog
+            -- Expected condition for outer tuple: Array.isArray(_matched_val_) && _matched_val_.length === 2
+            -- Expected condition for inner tuple (_matched_val_[0]): Array.isArray(_matched_val_[0]) && _matched_val_[0].length === 2 && _matched_val_[0][0] === 1 && _matched_val_[0][1] === true
+            -- Expected condition for PVar "y" (_matched_val_[1]): true
+            let expectedCondition = "Array.isArray(_matched_val_) && _matched_val_.length === 2 && Array.isArray(_matched_val_[0]) && _matched_val_[0].length === 2 && _matched_val_[0][0] === 1 && _matched_val_[0][1] === true && true"
+            js `shouldContain` expectedCondition
+            js `shouldContain` "const y = _matched_val_[1];"
+            js `shouldContain` "_result = ret(y);"
