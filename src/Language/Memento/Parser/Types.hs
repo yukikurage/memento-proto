@@ -31,11 +31,16 @@ effectsParser =
 typeTerm :: Parser Type
 typeTerm =
   choice
-    [ try $ parens typeExpr -- Recursive call to the new typeExpr
+    [ tupleTypeParser -- Added tupleTypeParser
+    , try $ parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
     , TAlgebraicData <$> identifier -- For ADT names
     ]
+
+-- | タプル型のパーサー
+tupleTypeParser :: Parser Type
+tupleTypeParser = TTuple <$> parens (sepBy typeExpr (symbol ","))
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
 functionTypeSuffixParser :: Type -> Parser Type
