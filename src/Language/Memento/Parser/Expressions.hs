@@ -85,13 +85,13 @@ ifExpr = (lexeme . try) $ do
 -- | ラムダ式
 lambdaExpr :: Parser Expr
 lambdaExpr = do
-  name <- lowerIdentifier -- 小文字で始まる識別子
+  patt <- patternParser -- Changed from lowerIdentifier to patternParser
   mType <- optional $ do
     void $ symbol ":"
     typeTerm -- from Types
   void $ symbol "->"
   body <- expr -- Recursive call to expr
-  return $ Lambda name mType body
+  return $ Lambda patt mType body
 
 -- | do構文
 doExpr :: Parser Expr

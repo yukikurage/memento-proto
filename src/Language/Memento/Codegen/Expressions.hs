@@ -49,15 +49,14 @@ generatePattern scrutineeExpr = \case
     let tagCheck = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
         -- This arity check is specific to a single-argument constructor.
         -- A more general ADT representation might not need scrutineeExpr.length check here,
-        -- or it might depend on the constructor definition.
-        -- For now, keeping it similar to original if it implied a fixed structure.
-        -- If constructors can have different numbers of arguments, this model is too simple.
-        -- Syntax.hs: ConstructorDef Text Type. This doesn't specify arity for the data it holds.
-        -- Let's assume the [tag, value] structure is consistent.
-        arityCheck = T.concat [scrutineeExpr, ".length === 2"] -- Check for [tag, value] structure
-        fullCondition = T.concat [tagCheck, " && ", arityCheck]
-        bindings = [(varName, T.concat [scrutineeExpr, "[1]"])]
-    in (fullCondition, bindings)
+        -- Constructor is ["tag", val1, val2, ...]. Nullary is ["tag"].
+        -- If varName is "_", we don't bind. Otherwise, bind to scrutineeExpr[1] (first payload).
+        -- This is a simplification; PConstructor currently only binds one variable.
+        condition = T.concat ["Array.isArray(", scrutineeExpr, ") && ", scrutineeExpr, ".length > 0 && ", scrutineeExpr, "[0] === \"", consName, "\""]
+        bindings = if varName == "_"
+                      then []
+                      else [(varName, T.concat [scrutineeExpr, "[1]"])] -- Bind to first payload element
+    in (condition, bindings)
   PVar varName ->
     (T.pack "true", [(varName, scrutineeExpr)])
   PWildcard ->
@@ -118,13 +117,20 @@ generateExpr = \case
           , "    : " <> elseExpr
           , ")"
           ]
-  Lambda name _ body ->
-    let bodyExpr = generateExpr body
-     in T.unlines
-          [ "ret((" <> name <> ") => {"
-          , "  return " <> bodyExpr <> ";"
-          , "})"
-          ]
+  Lambda pattern _ body ->
+    let lambdaArgName = "_lambda_arg" -- A fixed name for the lambda's argument
+        (conditionJs, bindingsList) = generatePattern lambdaArgName pattern
+        bindingsJs = generateBindings bindingsList
+        bodyJs = generateExpr body
+    in T.unlines
+        [ "ret(function(" <> lambdaArgName <> ") {"
+        , "  if (!(" <> conditionJs <> ")) {"
+        , "    throw new Error('Lambda argument pattern mismatch. Value: ' + JSON.stringify(" <> lambdaArgName <> "));"
+        , "  }"
+        , bindingsJs
+        , "  return " <> bodyJs <> ";"
+        , "})"
+        ]
   HandleApply handler arg ->
     let handlerExpr = generateExpr handler
         argExpr = generateExpr arg

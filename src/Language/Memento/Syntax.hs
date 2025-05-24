@@ -57,7 +57,7 @@ data Expr
   | Bool Bool -- 真偽値リテラル
   | BinOp BinOp Expr Expr -- 二項演算
   | If Expr Expr Expr -- if式 (condition) then expr else expr
-  | Lambda Text (Maybe Type) Expr -- ラムダ式 (変数名, 型注釈(省略可), 本体)
+  | Lambda Pattern (Maybe Type) Expr -- ラムダ式 (変数名, 型注釈(省略可), 本体)
   | Apply Expr Expr -- 関数適用
   | HandleApply Expr Expr -- ハンドル適用 (ハンドラ, 引数)
   | Do Text -- do name 構文
