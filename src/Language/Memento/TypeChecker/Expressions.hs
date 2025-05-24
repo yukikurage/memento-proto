@@ -219,18 +219,41 @@ inferType expr = case expr of
 
     return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
 
+-- Helper to get bindings from a pattern
+getPatternBindings :: Type -> Pattern -> Map.Map Text ConstructorSignature -> TypeCheck [(Text, Type)]
+getPatternBindings actualScrutineeType pattern adtCtorMap = case pattern of
+  PNumber _ -> do
+    unify actualScrutineeType TNumber
+    return []
+  PBool _ -> do
+    unify actualScrutineeType TBool
+    return []
+  PTuple subPatterns -> case actualScrutineeType of
+    TTuple elementTypes -> do
+      when (length subPatterns /= length elementTypes) $
+        throwError $ CustomErrorType $ "Tuple pattern arity mismatch. Expected " <> T.pack (show (length elementTypes)) <> " elements, got " <> T.pack (show (length subPatterns))
+      -- Recursively get bindings for sub-patterns
+      listOfBindings <- zipWithM (\p t -> getPatternBindings t p adtCtorMap) subPatterns elementTypes
+      return $ concat listOfBindings
+    _ -> throwError $ TypeMismatch actualScrutineeType (TTuple []) -- Expected a tuple type
+  PVar varName -> return [(varName, actualScrutineeType)]
+  PWildcard -> return []
+  PConstructor patConsName varName -> do
+    -- This pattern only makes sense if the scrutinee is an Algebraic Data Type
+    case actualScrutineeType of
+      TAlgebraicData adtName -> do
+        constructorSig <- case Map.lookup patConsName adtCtorMap of
+          Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not found in ADT '" <> adtName <> "' or ADT definition not found for type '" <> T.pack (show actualScrutineeType) <> "'"
+          Just sig -> return sig
+        -- Ensure the constructor belongs to the scrutinee's ADT type.
+        -- This is implicitly handled if adtCtorMap is correctly populated for the specific adtName.
+        return [(varName, csArgType constructorSig)]
+      _ -> throwError $ TypeMismatch actualScrutineeType (TAlgebraicData "SomeADT") -- Expected an ADT for PConstructor
+
 -- Helper for Match clause processing
 processClause :: Map.Map Text ConstructorSignature -> Type -> (Maybe Type, Effects) -> Clause -> TypeCheck (Maybe Type, Effects)
 processClause adtConstructorsMap scrutineeType (firstBranchTypeOpt, accClauseEffects) (Clause pattern branchExpr) = do
-  localBindings <- case pattern of
-    PConstructor patConsName varName -> do
-      constructorSig <- case Map.lookup patConsName adtConstructorsMap of
-        Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not part of ADT '" <> T.pack (show scrutineeType) <> "'"
-        Just sig -> return sig
-
-      return [(varName, csArgType constructorSig)]
-    PVar varName -> return [(varName, scrutineeType)] -- Bind var to the type of the scrutinee
-    PWildcard -> return []
+  localBindings <- getPatternBindings scrutineeType pattern adtConstructorsMap
 
   (currentBranchExprType, currentBranchExprEffects) <- withBindings localBindings $ inferType branchExpr
 
