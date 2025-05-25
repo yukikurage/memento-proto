@@ -105,8 +105,16 @@ inferType expr = case expr of
     (elseType, elseEff) <- inferType el
     unify thenType elseType
     return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
+  Apply (Lambda pattern mArgTypeAnnotation body) arg -> do
+    (argType, argEffs) <- inferType arg
+    (bindings, actualPatternType) <- checkLambdaPatternAndGetBindings pattern mArgTypeAnnotation
+    (bodyType, bodyEffects) <- withBindings bindings $ inferType body
+    unify actualPatternType argType
+    return (bodyType, argEffs `Set.union` bodyEffects)
   Lambda pattern mArgTypeAnnotation body -> do
     (bindings, actualPatternType) <- checkLambdaPatternAndGetBindings pattern mArgTypeAnnotation
+    -- Exhaustiveness check for annotated lambdas
+    checkPatternCoverage actualPatternType [pattern] -- Pass pattern as a list
     (bodyType, bodyEffects) <- withBindings bindings $ inferType body
     return (TFunction actualPatternType (bodyType, bodyEffects), Set.empty)
   HandleApply func arg -> do
@@ -286,15 +294,108 @@ getPatternBindings actualScrutineeType pattern adtCtorMap = case pattern of
   PWildcard -> return []
   PConstructor patConsName varName -> do
     case actualScrutineeType of
-      TAlgebraicData adtName -> do -- actualScrutineeType is the expected ADT
+      TAlgebraicData adtName -> do
+        -- actualScrutineeType is the expected ADT
         constructorSig <- case Map.lookup patConsName adtCtorMap of
           Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not found in ADT '" <> adtName <> "'."
           Just sig -> return sig
         -- Sanity check: the constructor's result type must match the ADT type we are checking against
         unless (csResultType constructorSig == TAlgebraicData adtName) $
-          throwError $ CustomErrorType $ "Internal error: Constructor '" <> patConsName <> "' from ADT '" <> adtName <> "' has an unexpected result type '" <> T.pack (show (csResultType constructorSig)) <> "'."
+          throwError $
+            CustomErrorType $
+              "Internal error: Constructor '" <> patConsName <> "' from ADT '" <> adtName <> "' has an unexpected result type '" <> T.pack (show (csResultType constructorSig)) <> "'."
         return [(varName, csArgType constructorSig)]
       _ -> throwError $ TypeMismatch actualScrutineeType (TAlgebraicData "SomeADT") -- Expected an ADT for PConstructor when matching
+
+-- Helper for lambda pattern coverage check
+checkPatternCoverage :: Type -> [Pattern] -> TypeCheck ()
+checkPatternCoverage typ patterns = do
+  adtEnv <- getAdtEnv
+  case typ of
+    TAlgebraicData adtName -> do
+      adtInfo <- case Map.lookup adtName adtEnv of
+        Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> adtName
+        Just info -> return info
+      let allCtors = Map.keysSet (adtConstructors adtInfo)
+      let (coveredCtors, hasWildcardOrVar) =
+            foldr
+              ( \p (accSet, accBool) -> case p of
+                  PConstructor cn _ -> (Set.insert cn accSet, accBool)
+                  PVar _ -> (accSet, True)
+                  PWildcard -> (accSet, True)
+                  _ -> (accSet, accBool)
+              )
+              (Set.empty, False)
+              patterns
+      unless (hasWildcardOrVar || allCtors `Set.isSubsetOf` coveredCtors) $
+        throwError $
+          NonExhaustiveLambdaPattern $
+            "Lambda pattern for ADT '"
+              <> adtName
+              <> "' is not exhaustive. Missing: "
+              <> T.pack (show (Set.toList (allCtors `Set.difference` coveredCtors)))
+    TNumber -> checkNumericPatternCoverage patterns
+    TBool -> checkBooleanPatternCoverage patterns
+    TTuple elementTypes -> checkTuplePatternCoverage elementTypes patterns
+    _ -> return () -- For other types (e.g. TFunction), no specific coverage check for now
+
+checkNumericPatternCoverage :: [Pattern] -> TypeCheck ()
+checkNumericPatternCoverage patterns = do
+  let (hasNumber, hasWildcardOrVar) =
+        foldr
+          ( \p (accNum, accWild) -> case p of
+              PNumber _ -> (True, accWild)
+              PVar _ -> (accNum, True)
+              PWildcard -> (accNum, True)
+              _ -> (accNum, accWild)
+          )
+          (False, False)
+          patterns
+  unless (hasNumber || hasWildcardOrVar) $
+    throwError $
+      NonExhaustiveLambdaPattern "Lambda pattern for Number is not exhaustive. Add a number pattern or wildcard/variable."
+
+checkBooleanPatternCoverage :: [Pattern] -> TypeCheck ()
+checkBooleanPatternCoverage patterns = do
+  let hasTrue = any (\p -> case p of PBool True -> True; _ -> False) patterns
+  let hasFalse = any (\p -> case p of PBool False -> True; _ -> False) patterns
+  let hasWildcardOrVar = any (\p -> case p of PVar _ -> True; PWildcard -> True; _ -> False) patterns
+  unless (hasWildcardOrVar || (hasTrue && hasFalse)) $
+    throwError $
+      NonExhaustiveLambdaPattern "Lambda pattern for Boolean is not exhaustive. Handle both True and False, or use a wildcard/variable."
+
+checkTuplePatternCoverage :: [Type] -> [Pattern] -> TypeCheck ()
+checkTuplePatternCoverage elementTypes patterns = do
+  -- For a single lambda argument, we expect one pattern.
+  -- If that pattern is a PTuple, its arity should match.
+  -- If it's PVar or PWildcard, it covers the tuple.
+  case patterns of
+    [PTuple subPatterns] ->
+      when (length subPatterns /= length elementTypes) $
+        throwError $
+          NonExhaustiveLambdaPattern $
+            "Lambda tuple pattern arity mismatch. Expected "
+              <> T.pack (show (length elementTypes))
+              <> " elements, got "
+              <> T.pack (show (length subPatterns))
+    [PVar _] -> return () -- Variable covers the tuple
+    [PWildcard] -> return () -- Wildcard covers the tuple
+    -- If there's only one pattern and it's not PTuple, PVar, or PWildcard, it's an error if the type is TTuple
+    [_]
+      | not (null elementTypes) -> -- elementTypes being non-null implies TTuple
+          throwError $
+            NonExhaustiveLambdaPattern $
+              "Lambda pattern for Tuple type with "
+                <> T.pack (show (length elementTypes))
+                <> " elements is not exhaustive. Use a tuple pattern, variable, or wildcard."
+    []
+      | not (null elementTypes) -> -- No patterns provided for a tuple type
+          throwError $
+            NonExhaustiveLambdaPattern $
+              "Lambda pattern for Tuple type with "
+                <> T.pack (show (length elementTypes))
+                <> " elements is missing."
+    _ -> return () -- Covers cases like empty tuple type or multiple patterns (which isn't standard for single arg lambdas)
 
 -- New helper function for lambda pattern checking
 checkLambdaPatternAndGetBindings :: Pattern -> Maybe Type -> TypeCheck ([(Text, Type)], Type)
@@ -306,7 +407,7 @@ checkLambdaPatternAndGetBindings pattern optAnnotation = case (pattern, optAnnot
     let adtCtorMap = case annotatedType of
           TAlgebraicData adtName -> maybe Map.empty adtConstructors (Map.lookup adtName adtEnv)
           _ -> Map.empty -- Not an ADT or ADT name not found, so no specific ADT constructors apply
-    -- Use getPatternBindings to check pattern against the annotated type and get bindings
+          -- Use getPatternBindings to check pattern against the annotated type and get bindings
     bindings <- getPatternBindings annotatedType p adtCtorMap
     return (bindings, annotatedType)
 

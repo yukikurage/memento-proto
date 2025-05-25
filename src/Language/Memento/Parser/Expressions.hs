@@ -107,7 +107,7 @@ matchExprParser :: Parser Expr
 matchExprParser = lexeme $ do
   rword "branch"
   scrutineeType <- typeTerm -- This parses a Type literal.
-  clauses <- brackets (sepBy (try (clauseParser expr)) (symbol ",")) -- Pass expr to clauseParser
+  clauses <- brackets (sepBy (clauseParser expr) (symbol ",")) -- Pass expr to clauseParser
   return $ Match scrutineeType clauses
 
 {- | ハンドラ節のパーサー
@@ -159,7 +159,7 @@ term =
     , try $ parens expr -- Recursive call to expr
     , try lambdaExpr
     , try doExpr
-    , try matchExprParser
+    , matchExprParser
     , try handlerExprParser
     , ifExpr
     , Var <$> identifier

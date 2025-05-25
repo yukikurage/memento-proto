@@ -109,5 +109,6 @@ data TypeError
   | CannotInferType Expr -- 型を推論できない
   | UndefinedEffect Text -- 未定義のエフェクト
   | EffectMismatch Effects Effects -- エフェクトが一致しない (実際のエフェクト, 期待されるエフェクト)
+  | NonExhaustiveLambdaPattern Text -- ラムダのパターンが網羅的でない (不足しているケース/型)
   | CustomErrorType Text -- カスタムメッセージ
   deriving (Show, Eq)
