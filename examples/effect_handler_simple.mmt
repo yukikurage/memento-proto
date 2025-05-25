@@ -14,14 +14,14 @@ effect ThrowE [
 
 // c_func: Takes a number, applies NumBool, then BoolNum if true, else returns 100.
 // Effects: <Trans>
-val c_func : (number -> number with <Trans, ThrowE>) := input_n -> (
-  input_n |> (do NumBool) |> x_nb : bool
+val c_func : number -> number with <Trans, ThrowE> := 
+  let input_n : number 
+  -> input_n |> (do NumBool) |> let　x_nb
   -> if (x_nb) then (
     true |> (do BoolNum)
   ) else (
     100 |> (do ThrowE)
-  )
-);
+  );
 
 
 val handle_trans : (number with <Trans> => number) := (
@@ -43,7 +43,7 @@ val test : number := 10;
 
 // main: Demonstrates handling Trans and ThrowE.
 val main : number -> Either := (
-  tmp 
-  -> test |> input_n
+  let tmp : number 
+  -> test |> let　input_n
   -> input_n |> c_func |>> handle_trans |>> handle_throw_e  // == Right 1
 );

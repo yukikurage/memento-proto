@@ -113,7 +113,7 @@ case "$1" in
     if [ -z "$2" ]; then
       compile_all_examples
     else
-      compile "$2"
+    compile "$2"
     fi
     ;;
   "all")
@@ -123,7 +123,7 @@ case "$1" in
     if [ -z "$2" ]; then
       die "実行するファイル名を指定してください"
     else
-      run "$2"
+    run "$2"
     fi
     ;;
   "clean")

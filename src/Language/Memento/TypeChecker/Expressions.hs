@@ -1,16 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- May be needed for some existing logic, e.g. in Match or Handle
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Language.Memento.TypeChecker.Expressions (
-  inferType,
-  -- Potentially helper functions if they were complex enough and are directly called by typeCheckProgram
-  -- For now, only inferType. Other helpers like partitionHandlerClauses, processReturnClauses etc. are local.
-  collectOpSigs, -- Exporting as it's used by inferType for Handle, but complex enough
-  partitionHandlerClauses, -- Exporting as it's used by inferType for Handle
-  processReturnClauses, -- Exporting as it's used by inferType for Handle
-  processOpClauses, -- Exporting as it's used by inferType for Handle
-) where
+module Language.Memento.TypeChecker.Expressions where
 
 import Control.Monad (foldM, unless, when, zipWithM)
 import Control.Monad.Except (throwError)
@@ -20,453 +13,148 @@ import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import Debug.Trace (traceM)
 import Language.Memento.Syntax
+import Language.Memento.TypeChecker.Handle (inferHandleType)
+import Language.Memento.TypeChecker.Match (inferMatchType)
 import Language.Memento.TypeChecker.Monad
+import Language.Memento.TypeChecker.Patterns (checkPatternAndGetBindings, checkPatternCoverage)
 import Language.Memento.TypeChecker.Types
 
--- | Helper: Partition HandlerClauses into operator clauses and return clauses
-partitionHandlerClauses :: [HandlerClause] -> ([HandlerClause], [HandlerClause])
-partitionHandlerClauses = List.partition isOpClause
- where
-  isOpClause HandlerClause{} = True
-  isOpClause _ = False
+-- | Infer the type and effects of an expression, optionally checking against an expected type.
+inferType :: Expr -> Maybe Type -> TypeCheck (Type, Effects)
+inferType expr mExpectedType = do
+  (inferredType, effects) <- case expr of
+    Number n -> return (TNumber, Set.empty)
+    Bool b -> return (TBool, Set.empty)
+    Var name -> do
+      env <- getEnv
+      case Map.lookup name env of
+        Nothing -> throwError $ UnboundVariable name
+        Just t -> return (t, Set.empty)
+    BinOp op e1 e2 -> do
+      -- Expected types for sub-expressions based on operator
+      let (mExpectedT1, mExpectedT2) = case op of
+            Add -> (Just TNumber, Just TNumber)
+            Sub -> (Just TNumber, Just TNumber)
+            Mul -> (Just TNumber, Just TNumber)
+            Div -> (Just TNumber, Just TNumber)
+            Lt -> (Just TNumber, Just TNumber)
+            Gt -> (Just TNumber, Just TNumber)
+            Eq -> (Nothing, Nothing) -- Types of e1 and e2 must unify, but can be anything initially
+      (t1, eff1) <- inferType e1 mExpectedT1
+      (t2, eff2) <- inferType e2 mExpectedT2
 
--- | Helper: Process return clauses for a Handle expression
-processReturnClauses :: Type -> [HandlerClause] -> TypeCheck (Type, Effects)
-processReturnClauses exprType [HandlerReturnClause retVarName bodyExpr] = withBinding retVarName exprType $ inferType bodyExpr
-processReturnClauses _ _ = throwError $ CustomErrorType "Internal error: processReturnClauses called with invalid arguments. Expected exactly one return clause properly structured."
+      let currentEffects = eff1 `Set.union` eff2
+      resType <- case op of
+        Add -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
+        Sub -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
+        Mul -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
+        Div -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
+        Eq -> unify t1 t2 >> return TBool
+        Lt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
+        Gt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
+      return (resType, currentEffects)
+    If cond thenExpr elseExpr -> do
+      (condType, condEff) <- inferType cond (Just TBool)
+      -- If mExpectedType for If is Just expected, thenExpr and elseExpr should conform to it
+      (thenType, thenEff) <- inferType thenExpr mExpectedType
+      (elseType, elseEff) <- inferType elseExpr (Just thenType) -- elseExpr must match thenExpr's type
+      unify thenType elseType -- Double check, though inferType for elseExpr should ensure it
+      return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
+    Apply (Lambda pattern mAnn lambdaBody) argExpr -> do
+      -- Infer argType first, this gives an expectation for the lambda's pattern
+      (argType, argEffs) <- inferType argExpr Nothing
+      (bindings, patternActualType) <- checkPatternAndGetBindings pattern (Just argType)
+      unify patternActualType argType
+      checkPatternCoverage argType [pattern]
+      -- If Apply itself has an mExpectedType, body should conform to it.
+      (lambdaBodyType, lambdaBodyEffects) <- withBindings bindings $ inferType lambdaBody mExpectedType
+      return (lambdaBodyType, argEffs `Set.union` lambdaBodyEffects)
+    Lambda pattern mAnn body -> do
+      let (mExpectedParamType, mExpectedBodyType) = case mExpectedType of
+            Just (TFunction ept (ebt, _)) -> (Just ept, Just ebt)
+            _ -> (Nothing, Nothing)
 
--- | Helper: Process operator clauses for a Handle expression
-processOpClauses :: Map.Map Text OperatorSignature -> [HandlerClause] -> Type -> Effects -> TypeCheck ()
-processOpClauses _ [] _ _ = return () -- No op clauses to process
-processOpClauses operatorSigsMap clauses targetBodyType targetBodyEffects = do
-  mapM_ processSingleOpClause clauses
- where
-  processSingleOpClause (HandlerClause opName argVarName contVarName bodyExpr) = do
-    opSig <- case Map.lookup opName operatorSigsMap of
-      Just sig -> return sig
-      Nothing -> throwError $ CustomErrorType $ "Operator '" <> opName <> "' not defined for handled effects (should be caught by exhaustiveness check)."
+      let patternContextType = case mAnn of -- Annotation takes precedence
+            Just annT -> Just annT
+            Nothing -> mExpectedParamType
 
-    let contType = TFunction (osRetType opSig) (targetBodyType, targetBodyEffects)
-    (currentOpClauseBodyType, currentOpClauseBodyEffects) <-
-      withBindings [(argVarName, osArgType opSig), (contVarName, contType)] $ inferType bodyExpr
+      (bindings, actualPatternType) <- checkPatternAndGetBindings pattern patternContextType
 
-    unify targetBodyType currentOpClauseBodyType
-    unless (currentOpClauseBodyEffects `Set.isSubsetOf` targetBodyEffects) $
-      throwError $
-        EffectMismatch targetBodyEffects currentOpClauseBodyEffects -- Corrected order
-  processSingleOpClause (HandlerReturnClause _ _) =
-    throwError $ CustomErrorType "Internal error: processOpClauses received a HandlerReturnClause."
+      -- Ensure annotation, if present, matches actual pattern type
+      case mAnn of
+        Just annT -> unify annT actualPatternType
+        Nothing -> return ()
+      -- Ensure expected param type, if present, matches actual pattern type
+      case mExpectedParamType of
+        Just ept -> unify ept actualPatternType
+        Nothing -> return ()
 
--- | Helper: Collect operator signatures for handled effects
-collectOpSigs :: Map.Map Text EffectInfo -> Map.Map Text OperatorSignature -> Text -> TypeCheck (Map.Map Text OperatorSignature)
-collectOpSigs effectEnv accSigs effectName = do
-  effectInfo <- case Map.lookup effectName effectEnv of
-    Just ei -> return ei
-    Nothing -> throwError $ CustomErrorType $ "Undefined effect referenced in handle: " <> effectName
-  let currentEffectOps = eiOps effectInfo
-  mapM_
-    ( \opN ->
-        when (Map.member opN accSigs) $
-          throwError $
-            CustomErrorType $
-              "Duplicate operator name '" <> opN <> "' found across handled effects."
-    )
-    (Map.keys currentEffectOps)
-  return $ Map.union accSigs currentEffectOps
+      checkPatternCoverage actualPatternType [pattern]
+      (bodyType, bodyEffects) <- withBindings bindings $ inferType body mExpectedBodyType
+      return (TFunction actualPatternType (bodyType, bodyEffects), Set.empty)
+    HandleApply func arg -> do
+      -- Infer argType first
+      (argType, argEffs) <- inferType arg Nothing
+      -- Try to infer func as a THandler expecting argType
+      -- If mExpectedType is Just retT, func should be THandler argType (retT, _)
+      let mExpectedFuncType = case mExpectedType of
+            Just expectedRetT -> Just (THandler (argType, Set.empty) (expectedRetT, Set.empty)) -- Effects are wildcards for now
+            Nothing -> Nothing
+      (funcType, funcEffs) <- inferType func mExpectedFuncType
 
--- | Infer the type and effects of an expression.
-inferType :: Expr -> TypeCheck (Type, Effects)
-inferType expr = case expr of
-  Number _ -> return (TNumber, Set.empty)
-  Bool _ -> return (TBool, Set.empty)
-  Var name -> do
-    env <- getEnv
-    case Map.lookup name env of
-      Nothing -> throwError $ UnboundVariable name
-      Just t -> return (t, Set.empty)
-  BinOp op e1 e2 -> do
-    (t1, eff1) <- inferType e1
-    (t2, eff2) <- inferType e2
-    let currentEffects = eff1 `Set.union` eff2
-    resType <- case op of
-      Add -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
-      Sub -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
-      Mul -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
-      Div -> unify TNumber t1 >> unify TNumber t2 >> return TNumber
-      Eq -> unify t1 t2 >> return TBool
-      Lt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
-      Gt -> unify TNumber t1 >> unify TNumber t2 >> return TBool
-    return (resType, currentEffects)
-  If cond th el -> do
-    (condType, condEff) <- inferType cond
-    unify TBool condType
-    (thenType, thenEff) <- inferType th
-    (elseType, elseEff) <- inferType el
-    unify thenType elseType
-    return (thenType, condEff `Set.union` thenEff `Set.union` elseEff)
-  Apply (Lambda pattern mArgTypeAnnotation body) arg -> do
-    (argType, argEffs) <- inferType arg
-    (bindings, actualPatternType) <- checkLambdaPatternAndGetBindings pattern mArgTypeAnnotation
-    (bodyType, bodyEffects) <- withBindings bindings $ inferType body
-    unify actualPatternType argType
-    return (bodyType, argEffs `Set.union` bodyEffects)
-  Lambda pattern mArgTypeAnnotation body -> do
-    (bindings, actualPatternType) <- checkLambdaPatternAndGetBindings pattern mArgTypeAnnotation
-    -- Exhaustiveness check for annotated lambdas
-    checkPatternCoverage actualPatternType [pattern] -- Pass pattern as a list
-    (bodyType, bodyEffects) <- withBindings bindings $ inferType body
-    return (TFunction actualPatternType (bodyType, bodyEffects), Set.empty)
-  HandleApply func arg -> do
-    (funcType, funcEffs) <- inferType func
-    (argType, argEffs) <- inferType arg
-    let accumulatedEffects = funcEffs `Set.union` argEffs
-    case funcType of
-      THandler (paramT, consumedEffects) (retT, generatedEffects) -> do
-        unify paramT argType
-        return (retT, (accumulatedEffects `Set.difference` consumedEffects) `Set.union` generatedEffects)
-      _ -> throwError $ TypeMismatch funcType (THandler (argType, Set.empty) (TAlgebraicData "_", Set.empty)) -- Placeholder for expected type
-  Apply func arg -> do
-    (funcType, funcEffs) <- inferType func
-    (argType, argEffs) <- inferType arg
-    let accumulatedEffects = funcEffs `Set.union` argEffs
-    case funcType of
-      TFunction paramT (retT, generatedEffects) -> do
-        unify paramT argType
-        return (retT, accumulatedEffects `Set.union` generatedEffects)
-      _ -> throwError $ TypeMismatch funcType (TFunction argType (TAlgebraicData "_", Set.empty)) -- Placeholder for expected type
-  Do name -> do
-    opEnv <- getOperatorEnv
-    case Map.lookup name opEnv of
-      Just (OperatorSignature{osArgType = paramT, osRetType = retT, osEffectName = effectName}) -> do
-        return (TFunction paramT (retT, Set.singleton (Effect effectName)), Set.empty)
-      Nothing -> throwError $ UndefinedEffect name
-  Match scrutineeType clauses -> do
-    -- Scrutinee can be any type now: ADT, primitive (number, boolean), or tuple
-    when (null clauses) $
-      throwError $
-        CustomErrorType "Match expression cannot have empty clauses"
+      let accumulatedEffects = funcEffs `Set.union` argEffs
+      case funcType of
+        THandler (paramT, consumedEffects) (retT, generatedEffects) -> do
+          unify paramT argType
+          return (retT, (accumulatedEffects `Set.difference` consumedEffects) `Set.union` generatedEffects)
+        _ -> throwError $ TypeMismatch funcType (THandler (argType, Set.empty) (TAlgebraicData "infer", Set.empty))
+    Apply func argExpr -> do
+      -- If the whole Apply expression has an expected type, the function's return type is constrained
+      let mExpectedFuncRetType = mExpectedType
 
-    -- Process based on scrutinee type
-    (adtConstructorsMap, processedClauses) <- case scrutineeType of
-      -- For Algebraic Data Types
-      TAlgebraicData name -> do
-        adtEnv <- getAdtEnv
-        adtInfo <- case Map.lookup name adtEnv of
-          Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> name
-          Just info -> return info
-        return (adtConstructors adtInfo, clauses)
+      -- We need to infer the function type first, possibly without a specific expected structure initially,
+      -- or derive a partial expectation for the function if mExpectedFuncRetType is available.
+      (funcType, funcEffs) <- inferType func Nothing -- Could refine this later
+      case funcType of
+        TFunction expectedArgType (actualRetType, funcBodyEffects) -> do
+          (argType, argEffs) <- inferType argExpr (Just expectedArgType) -- Arg must match function's param type
+          -- The actual return type of the function is unified with the overall expected type
+          case mExpectedFuncRetType of
+            Just ert -> unify actualRetType ert
+            Nothing -> return ()
+          return (actualRetType, funcEffs `Set.union` argEffs `Set.union` funcBodyEffects)
+        _ -> do
+          -- If funcType is not TFunction, try to infer arg then throw error
+          traceM $ "funcType: " <> show funcType
+          (argType, _) <- inferType argExpr Nothing
+          throwError $ TypeMismatch funcType (TFunction argType (fromMaybe (TAlgebraicData "infer") mExpectedFuncRetType, Set.empty))
+    Do name -> do
+      opEnv <- getOperatorEnv
+      case Map.lookup name opEnv of
+        Just (OperatorSignature{osArgType = paramT, osRetType = retT, osEffectName = effectName}) ->
+          return (TFunction paramT (retT, Set.singleton (Effect effectName)), Set.empty)
+        Nothing -> throwError $ UndefinedEffectOperator name
+    Match scrutineeType clauses -> do
+      -- The scrutineeType is given directly by the parser.
+      -- The mExpectedType for the Match expression is the expected type for its branches.
+      (matchBodyType, matchBodyEffs) <- inferMatchType inferType scrutineeType clauses mExpectedType
+      return (matchBodyType, matchBodyEffs)
+    Handle handlerType clauses ->
+      -- mExpectedType for Handle expression is the expected return type of the handler.
+      inferHandleType inferType handlerType clauses mExpectedType
+    Tuple exprsList -> do
+      let mExpectedElementTypes = case mExpectedType of
+            Just (TTuple ts) | length ts == length exprsList -> map Just ts
+            _ -> replicate (length exprsList) Nothing
 
-      -- For Primitive Types (Number, Boolean) and Tuples
-      _ -> return (Map.empty, clauses)
+      results <- zipWithM (\e met -> inferType e met) exprsList mExpectedElementTypes
+      let inferredTypes = map fst results
+      let inferredEffects = Set.unions (map snd results)
+      return (TTuple inferredTypes, inferredEffects)
 
-    (firstBranchTypeOpt, totalClauseEffects) <- foldM (processClause adtConstructorsMap scrutineeType) (Nothing, Set.empty) processedClauses
-
-    finalMatchExprType <- case firstBranchTypeOpt of
-      Nothing -> throwError $ CustomErrorType "Could not determine type of match expression"
-      Just t -> return t
-
-    -- Exhaustiveness Check based on scrutinee type
-    case scrutineeType of
-      -- For algebraic data types
-      TAlgebraicData name -> do
-        let (coveredConstructors, hasWildcardOrVar) =
-              foldr
-                ( \(Clause p _) (accSet, accBool) -> case p of
-                    PConstructor cn _ -> (Set.insert cn accSet, accBool)
-                    PVar _ -> (accSet, True)
-                    PWildcard -> (accSet, True)
-                    _ -> (accSet, accBool) -- Other patterns don't contribute to ADT coverage
-                )
-                (Set.empty, False)
-                clauses
-
-        unless hasWildcardOrVar $ do
-          let allAdtConstructors = Map.keysSet adtConstructorsMap
-          unless (allAdtConstructors `Set.isSubsetOf` coveredConstructors) $
-            throwError $
-              CustomErrorType $
-                "Pattern matching is not exhaustive for ADT '" <> name <> "'. Missing: " <> T.pack (show (Set.toList (allAdtConstructors `Set.difference` coveredConstructors)))
-
-      -- For number
-      TNumber -> do
-        let (hasNumberPattern, hasWildcardOrVar) =
-              foldr
-                ( \(Clause p _) (accNum, accWild) -> case p of
-                    PNumber _ -> (True, accWild)
-                    PVar _ -> (accNum, True)
-                    PWildcard -> (accNum, True)
-                    _ -> (accNum, accWild)
-                )
-                (False, False)
-                clauses
-
-        unless (hasNumberPattern || hasWildcardOrVar) $
-          throwError $
-            CustomErrorType "Pattern matching is not exhaustive for Number type. Add a number pattern or wildcard."
-
-      -- For boolean
-      TBool -> do
-        let patterns = map (\(Clause p _) -> p) clauses
-        let hasTruePattern = any (\p -> case p of PBool True -> True; _ -> False) patterns
-        let hasFalsePattern = any (\p -> case p of PBool False -> True; _ -> False) patterns
-        let hasWildcardOrVar = any (\p -> case p of PVar _ -> True; PWildcard -> True; _ -> False) patterns
-
-        unless (hasWildcardOrVar || (hasTruePattern && hasFalsePattern)) $
-          throwError $
-            CustomErrorType "Pattern matching is not exhaustive for Boolean type. Need to handle both True and False cases."
-
-      -- For tuple
-      TTuple types -> do
-        let hasTuplePattern = any (\(Clause p _) -> case p of PTuple _ -> True; _ -> False) clauses
-        let hasWildcardOrVar = any (\(Clause p _) -> case p of PVar _ -> True; PWildcard -> True; _ -> False) clauses
-
-        unless (hasTuplePattern || hasWildcardOrVar) $
-          throwError $
-            CustomErrorType $
-              "Pattern matching is not exhaustive for Tuple type with " <> T.pack (show (length types)) <> " elements."
-
-      -- For other types, we don't enforce specific exhaustiveness rules
-      _ -> return ()
-
-    -- The type of a Match expression is TFunction ScrutineeType BranchType.
-    return (TFunction scrutineeType (finalMatchExprType, totalClauseEffects), Set.empty)
-  Handle handlerType handlerClauses -> do
-    effectEnv <- getEffectEnv
-    ((argType, argEffects), (retType, retEffects)) <- extractHandlerType handlerType
-    let effectNamesToHandle = Set.map (\(Effect name) -> name) argEffects
-    operatorSigsMap :: Map.Map Text OperatorSignature <- foldM (collectOpSigs effectEnv) Map.empty effectNamesToHandle
-
-    let (opClauses, returnClauses) = partitionHandlerClauses handlerClauses
-    when (null returnClauses) $
-      throwError $
-        CustomErrorType "Handle expression must have at least one return clause."
-    when (length returnClauses > 1) $
-      throwError $
-        CustomErrorType "Handle expression cannot have more than one return clause."
-
-    (targetBodyType, returnClausesEffects) <- processReturnClauses argType returnClauses
-
-    -- Process operator clauses, ensuring their bodies unify with targetBodyType and effects are subsets of returnClausesEffects
-    processOpClauses operatorSigsMap opClauses targetBodyType returnClausesEffects
-
-    -- Exhaustiveness Check for Handle
-    handledOperatorsInClauses <- foldM (checkOpClauseExhaustiveness operatorSigsMap) Set.empty opClauses
-    let allOperatorsInHandledEffects = Map.keysSet operatorSigsMap
-    unless (allOperatorsInHandledEffects `Set.isSubsetOf` handledOperatorsInClauses) $
-      throwError $
-        CustomErrorType $
-          "Handle expression is not exhaustive. Missing handlers for operators: "
-            <> T.pack (show (Set.toList (allOperatorsInHandledEffects `Set.difference` handledOperatorsInClauses)))
-
-    return (THandler (argType, argEffects) (retType, retEffects), Set.empty)
-  Tuple exprsList -> do
-    -- Infer types and effects for each expression in the tuple
-    typedExprs <- mapM inferType exprsList
-    -- Separate the types and effects
-    let (inferredTypes, inferredEffectsList) = unzip typedExprs
-    -- The resulting type is a tuple of the inferred types
-    let tupleType = TTuple inferredTypes
-    -- The resulting effects are the union of all inferred effects
-    let combinedEffects = Set.unions inferredEffectsList
-    return (tupleType, combinedEffects)
-
--- Helper to get bindings from a pattern
-getPatternBindings :: Type -> Pattern -> Map.Map Text ConstructorSignature -> TypeCheck [(Text, Type)]
-getPatternBindings actualScrutineeType pattern adtCtorMap = case pattern of
-  PNumber _ -> do
-    unify actualScrutineeType TNumber
-    return []
-  PBool _ -> do
-    unify actualScrutineeType TBool
-    return []
-  PTuple subPatterns -> case actualScrutineeType of
-    TTuple elementTypes -> do
-      when (length subPatterns /= length elementTypes) $
-        throwError $
-          CustomErrorType $
-            "Tuple pattern arity mismatch. Expected " <> T.pack (show (length elementTypes)) <> " elements, got " <> T.pack (show (length subPatterns))
-      -- Recursively get bindings for sub-patterns
-      listOfBindings <- zipWithM (\p t -> getPatternBindings t p adtCtorMap) subPatterns elementTypes -- Pass adtCtorMap through
-      return $ concat listOfBindings
-    _ -> throwError $ TypeMismatch actualScrutineeType (TTuple []) -- Expected a tuple type
-  PVar varName -> return [(varName, actualScrutineeType)]
-  PWildcard -> return []
-  PConstructor patConsName varName -> do
-    case actualScrutineeType of
-      TAlgebraicData adtName -> do
-        -- actualScrutineeType is the expected ADT
-        constructorSig <- case Map.lookup patConsName adtCtorMap of
-          Nothing -> throwError $ CustomErrorType $ "Constructor '" <> patConsName <> "' not found in ADT '" <> adtName <> "'."
-          Just sig -> return sig
-        -- Sanity check: the constructor's result type must match the ADT type we are checking against
-        unless (csResultType constructorSig == TAlgebraicData adtName) $
-          throwError $
-            CustomErrorType $
-              "Internal error: Constructor '" <> patConsName <> "' from ADT '" <> adtName <> "' has an unexpected result type '" <> T.pack (show (csResultType constructorSig)) <> "'."
-        return [(varName, csArgType constructorSig)]
-      _ -> throwError $ TypeMismatch actualScrutineeType (TAlgebraicData "SomeADT") -- Expected an ADT for PConstructor when matching
-
--- Helper for lambda pattern coverage check
-checkPatternCoverage :: Type -> [Pattern] -> TypeCheck ()
-checkPatternCoverage typ patterns = do
-  adtEnv <- getAdtEnv
-  case typ of
-    TAlgebraicData adtName -> do
-      adtInfo <- case Map.lookup adtName adtEnv of
-        Nothing -> throwError $ CustomErrorType $ "ADT info not found for type: " <> adtName
-        Just info -> return info
-      let allCtors = Map.keysSet (adtConstructors adtInfo)
-      let (coveredCtors, hasWildcardOrVar) =
-            foldr
-              ( \p (accSet, accBool) -> case p of
-                  PConstructor cn _ -> (Set.insert cn accSet, accBool)
-                  PVar _ -> (accSet, True)
-                  PWildcard -> (accSet, True)
-                  _ -> (accSet, accBool)
-              )
-              (Set.empty, False)
-              patterns
-      unless (hasWildcardOrVar || allCtors `Set.isSubsetOf` coveredCtors) $
-        throwError $
-          NonExhaustiveLambdaPattern $
-            "Lambda pattern for ADT '"
-              <> adtName
-              <> "' is not exhaustive. Missing: "
-              <> T.pack (show (Set.toList (allCtors `Set.difference` coveredCtors)))
-    TNumber -> checkNumericPatternCoverage patterns
-    TBool -> checkBooleanPatternCoverage patterns
-    TTuple elementTypes -> checkTuplePatternCoverage elementTypes patterns
-    _ -> return () -- For other types (e.g. TFunction), no specific coverage check for now
-
-checkNumericPatternCoverage :: [Pattern] -> TypeCheck ()
-checkNumericPatternCoverage patterns = do
-  let (hasNumber, hasWildcardOrVar) =
-        foldr
-          ( \p (accNum, accWild) -> case p of
-              PNumber _ -> (True, accWild)
-              PVar _ -> (accNum, True)
-              PWildcard -> (accNum, True)
-              _ -> (accNum, accWild)
-          )
-          (False, False)
-          patterns
-  unless (hasNumber || hasWildcardOrVar) $
-    throwError $
-      NonExhaustiveLambdaPattern "Lambda pattern for Number is not exhaustive. Add a number pattern or wildcard/variable."
-
-checkBooleanPatternCoverage :: [Pattern] -> TypeCheck ()
-checkBooleanPatternCoverage patterns = do
-  let hasTrue = any (\p -> case p of PBool True -> True; _ -> False) patterns
-  let hasFalse = any (\p -> case p of PBool False -> True; _ -> False) patterns
-  let hasWildcardOrVar = any (\p -> case p of PVar _ -> True; PWildcard -> True; _ -> False) patterns
-  unless (hasWildcardOrVar || (hasTrue && hasFalse)) $
-    throwError $
-      NonExhaustiveLambdaPattern "Lambda pattern for Boolean is not exhaustive. Handle both True and False, or use a wildcard/variable."
-
-checkTuplePatternCoverage :: [Type] -> [Pattern] -> TypeCheck ()
-checkTuplePatternCoverage elementTypes patterns = do
-  -- For a single lambda argument, we expect one pattern.
-  -- If that pattern is a PTuple, its arity should match.
-  -- If it's PVar or PWildcard, it covers the tuple.
-  case patterns of
-    [PTuple subPatterns] ->
-      when (length subPatterns /= length elementTypes) $
-        throwError $
-          NonExhaustiveLambdaPattern $
-            "Lambda tuple pattern arity mismatch. Expected "
-              <> T.pack (show (length elementTypes))
-              <> " elements, got "
-              <> T.pack (show (length subPatterns))
-    [PVar _] -> return () -- Variable covers the tuple
-    [PWildcard] -> return () -- Wildcard covers the tuple
-    -- If there's only one pattern and it's not PTuple, PVar, or PWildcard, it's an error if the type is TTuple
-    [_]
-      | not (null elementTypes) -> -- elementTypes being non-null implies TTuple
-          throwError $
-            NonExhaustiveLambdaPattern $
-              "Lambda pattern for Tuple type with "
-                <> T.pack (show (length elementTypes))
-                <> " elements is not exhaustive. Use a tuple pattern, variable, or wildcard."
-    []
-      | not (null elementTypes) -> -- No patterns provided for a tuple type
-          throwError $
-            NonExhaustiveLambdaPattern $
-              "Lambda pattern for Tuple type with "
-                <> T.pack (show (length elementTypes))
-                <> " elements is missing."
-    _ -> return () -- Covers cases like empty tuple type or multiple patterns (which isn't standard for single arg lambdas)
-
--- New helper function for lambda pattern checking
-checkLambdaPatternAndGetBindings :: Pattern -> Maybe Type -> TypeCheck ([(Text, Type)], Type)
-checkLambdaPatternAndGetBindings pattern optAnnotation = case (pattern, optAnnotation) of
-  -- Case 1: Type annotation is provided
-  (p, Just annotatedType) -> do
-    adtEnv <- getAdtEnv
-    -- Determine the relevant ADT constructor map if the annotated type is an ADT
-    let adtCtorMap = case annotatedType of
-          TAlgebraicData adtName -> maybe Map.empty adtConstructors (Map.lookup adtName adtEnv)
-          _ -> Map.empty -- Not an ADT or ADT name not found, so no specific ADT constructors apply
-          -- Use getPatternBindings to check pattern against the annotated type and get bindings
-    bindings <- getPatternBindings annotatedType p adtCtorMap
-    return (bindings, annotatedType)
-
-  -- Case 2: No type annotation (inference - simple cases for now)
-  (PVar varName, Nothing) -> do
-    -- Defaulting to TNumber as per previous behavior for unannotated lambdas (name -> ...)
-    -- This is a simplification and might need refinement for true polymorphic lambdas.
-    let inferredType = TNumber
-    return ([(varName, inferredType)], inferredType)
-  (PWildcard, Nothing) -> do
-    let inferredType = TNumber -- Similar default for wildcard
-    return ([], inferredType)
-  (PNumber _, Nothing) -> return ([], TNumber)
-  (PBool _, Nothing) -> return ([], TBool)
-  (PTuple subPatterns, Nothing) -> do
-    -- Recursively infer for sub-patterns
-    results <- mapM (`checkLambdaPatternAndGetBindings` Nothing) subPatterns
-    let bindings = concatMap fst results
-    let types = map snd results
-    return (bindings, TTuple types)
-  (PConstructor ctorName varName, Nothing) -> do
-    -- Infer from global constructor environment
-    env <- getEnv -- This env contains variable types and constructor types
-    case Map.lookup ctorName env of
-      Just (TFunction argType (resultType@(TAlgebraicData _), _)) -> do
-        -- Ensure resultType is indeed TAlgebraicData, which it should be for constructors
-        return ([(varName, argType)], resultType)
-      Just otherType -> throwError $ CustomErrorType $ "Expected constructor '" <> ctorName <> "' to have a function type, but got " <> T.pack (show otherType)
-      Nothing -> throwError $ CustomErrorType $ "Constructor '" <> ctorName <> "' not found in environment for inference."
-
-  -- Catch-all for complex patterns without annotation (e.g. PConstructor inside PTuple without annotation)
-  -- This could be refined, but for now, require annotations for more complex unannotated patterns.
-  (p, Nothing) -> throwError $ CannotInferType (Lambda p optAnnotation (Var "dummy")) -- Dummy expr
-
--- Helper for Match clause processing
-processClause :: Map.Map Text ConstructorSignature -> Type -> (Maybe Type, Effects) -> Clause -> TypeCheck (Maybe Type, Effects)
-processClause adtConstructorsMap scrutineeType (firstBranchTypeOpt, accClauseEffects) (Clause pattern branchExpr) = do
-  localBindings <- getPatternBindings scrutineeType pattern adtConstructorsMap
-
-  (currentBranchExprType, currentBranchExprEffects) <- withBindings localBindings $ inferType branchExpr
-
-  newFirstBranchTypeOpt <- case firstBranchTypeOpt of
-    Nothing -> return $ Just currentBranchExprType
-    Just firstBranchType -> do
-      unify firstBranchType currentBranchExprType
-      return $ Just firstBranchType
-
-  return (newFirstBranchTypeOpt, accClauseEffects `Set.union` currentBranchExprEffects)
-
--- Helper for Handle exhaustiveness check
-checkOpClauseExhaustiveness :: Map.Map Text OperatorSignature -> Set.Set Text -> HandlerClause -> TypeCheck (Set.Set Text)
-checkOpClauseExhaustiveness operatorSigsMap acc (HandlerClause opName _ _ _) = do
-  when (Set.member opName acc) $
-    throwError $
-      CustomErrorType $
-        "Duplicate operator '" <> opName <> "' in handle clauses."
-  unless (Map.member opName operatorSigsMap) $
-    throwError $
-      CustomErrorType $
-        "Operator '" <> opName <> "' in handle clause is not part of the handled effects."
-  return $ Set.insert opName acc
-checkOpClauseExhaustiveness _ acc (HandlerReturnClause _ _) = return acc -- Return clauses don't count towards op exhaustiveness
+  -- Final unification with the overall expected type, if provided
+  case mExpectedType of
+    Just expectedT -> unifyOnlyType expectedT inferredType >> return (expectedT, effects) -- Return expectedT after successful unification
+    Nothing -> return (inferredType, effects)

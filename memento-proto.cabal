@@ -38,7 +38,10 @@ library
     Language.Memento.Syntax
     Language.Memento.TypeChecker
     Language.Memento.TypeChecker.Expressions
+    Language.Memento.TypeChecker.Handle
+    Language.Memento.TypeChecker.Match
     Language.Memento.TypeChecker.Monad
+    Language.Memento.TypeChecker.Patterns
     Language.Memento.TypeChecker.Registration
     Language.Memento.TypeChecker.Types
   other-modules:

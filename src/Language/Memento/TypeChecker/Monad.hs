@@ -17,6 +17,7 @@ module Language.Memento.TypeChecker.Monad (
   -- Exported functions moved from Types.hs
   resolveType,
   unify,
+  unifyOnlyType,
   isSubEffects,
   extractConstructorType,
   extractHandlerType,
@@ -169,6 +170,18 @@ unify (TFunction argT1 (retT1, eff1)) (TFunction argT2 (retT2, eff2)) = do
     throwError $
       EffectMismatch eff2 eff1 -- Corrected based on previous step's notes
 unify expected actual =
+  Control.Monad.when (expected /= actual) $ -- Explicitly using Control.Monad.when
+    throwError $
+      TypeMismatch expected actual
+
+unifyOnlyType :: Type -> Type -> TypeCheck ()
+unifyOnlyType (THandler (argT1, eff1) (retT1, eff2)) (THandler (argT2, eff3) (retT2, eff4)) = do
+  unify argT1 argT2
+  unify retT1 retT2
+unifyOnlyType (TFunction argT1 (retT1, eff1)) (TFunction argT2 (retT2, eff2)) = do
+  unify argT1 argT2
+  unify retT1 retT2
+unifyOnlyType expected actual =
   Control.Monad.when (expected /= actual) $ -- Explicitly using Control.Monad.when
     throwError $
       TypeMismatch expected actual

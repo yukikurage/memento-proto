@@ -85,6 +85,7 @@ ifExpr = (lexeme . try) $ do
 -- | ラムダ式
 lambdaExpr :: Parser Expr
 lambdaExpr = do
+  rword "let"
   patt <- patternParser -- Changed from lowerIdentifier to patternParser
   mType <- optional $ do
     void $ symbol ":"

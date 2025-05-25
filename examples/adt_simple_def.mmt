@@ -13,10 +13,10 @@ val present_num : NumBool := 10 |> SomeNum;
 val absent_num : NumBool := true |> SomeBool;
 
 // Function that uses pattern matching to extract value or return default
-val get_num_or_default : (NumBool -> number) := 
+val get_num_or_default : NumBool -> number := 
   branch NumBool [
-    (SomeNum n) -> n,
-    (SomeBool b) -> if b then 1 else 0 // Default value if None
+    let SomeNum n -> n,
+    let SomeBool b -> if b then 1 else 0 // Default value if None
   ];
 
 // Test with Some
@@ -26,4 +26,4 @@ val test_some : number := 42 |> SomeNum |> get_num_or_default; // Expected: 42
 val test_none : number := true |> SomeBool |> get_num_or_default;    // Expected: 0
 
 // Simple main to ensure it can be processed (though execution isn't the primary test here)
-val main : number -> number := tmp -> test_some;
+val main : number -> number := let tmp -> test_some;

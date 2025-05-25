@@ -29,34 +29,26 @@ generatePattern scrutineeExpr = \case
   PBool b ->
     (T.concat [scrutineeExpr, " === ", T.pack (if b then "true" else "false")], [])
   PTuple subPatterns ->
-    let arity = length subPatterns
-        arityCheck = T.concat ["Array.isArray(", scrutineeExpr, ") && ", scrutineeExpr, ".length === ", T.pack (show arity)]
-        
-        processSubPattern (index, pat) =
+    let processSubPattern index pat =
           let elementScrutinee = T.concat [scrutineeExpr, "[", T.pack (show index), "]"]
-          in generatePattern elementScrutinee pat
+           in generatePattern elementScrutinee pat
 
-        results = map processSubPattern (zip [0..] subPatterns)
-        
+        results = zipWith processSubPattern [0 ..] subPatterns
+
         subConditions = map fst results
         subBindingsList = map snd results
-        
-        fullCondition = T.intercalate " && " (arityCheck : subConditions)
+
+        fullCondition = T.intercalate " && " subConditions
         allBindings = concat subBindingsList
-    in (fullCondition, allBindings)
+     in (fullCondition, allBindings)
   PConstructor consName varName ->
     -- Assuming ADT representation: [constructorName, value]
-    let tagCheck = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
-        -- This arity check is specific to a single-argument constructor.
-        -- A more general ADT representation might not need scrutineeExpr.length check here,
-        -- Constructor is ["tag", val1, val2, ...]. Nullary is ["tag"].
-        -- If varName is "_", we don't bind. Otherwise, bind to scrutineeExpr[1] (first payload).
-        -- This is a simplification; PConstructor currently only binds one variable.
-        condition = T.concat ["Array.isArray(", scrutineeExpr, ") && ", scrutineeExpr, ".length > 0 && ", scrutineeExpr, "[0] === \"", consName, "\""]
-        bindings = if varName == "_"
-                      then []
-                      else [(varName, T.concat [scrutineeExpr, "[1]"])] -- Bind to first payload element
-    in (condition, bindings)
+    let
+      condition = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
+      bindings =
+        ([(varName, T.concat [scrutineeExpr, "[1]"]) | varName /= "_"]) -- Bind to first payload element
+     in
+      (condition, bindings)
   PVar varName ->
     (T.pack "true", [(varName, scrutineeExpr)])
   PWildcard ->
@@ -122,15 +114,15 @@ generateExpr = \case
         (conditionJs, bindingsList) = generatePattern lambdaArgName pattern
         bindingsJs = generateBindings bindingsList
         bodyJs = generateExpr body
-    in T.unlines
-        [ "ret(function(" <> lambdaArgName <> ") {"
-        , "  if (!(" <> conditionJs <> ")) {"
-        , "    throw new Error('Lambda argument pattern mismatch. Value: ' + JSON.stringify(" <> lambdaArgName <> "));"
-        , "  }"
-        , bindingsJs
-        , "  return " <> bodyJs <> ";"
-        , "})"
-        ]
+     in T.unlines
+          [ "ret(function(" <> lambdaArgName <> ") {"
+          , "  if (!(" <> conditionJs <> ")) {"
+          , "    throw new Error('Lambda argument pattern mismatch. Value: ' + JSON.stringify(" <> lambdaArgName <> "));"
+          , "  }"
+          , bindingsJs
+          , "  return " <> bodyJs <> ";"
+          , "})"
+          ]
   HandleApply handler arg ->
     let handlerExpr = generateExpr handler
         argExpr = generateExpr arg

@@ -1,8 +1,8 @@
-val is_even : number -> bool := (n ->
+val is_even : number -> bool := (let n ->
   if (n == 0) then true else (n - 1 |> is_odd)
 );
 
-val is_odd : number -> bool := (n ->
+val is_odd : number -> bool := (let n ->
   if (n == 0) then false else (n - 1 |> is_even)
 );
 

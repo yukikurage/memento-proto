@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 
 module Language.Memento.Syntax (
-  Effect (..),
+  Effect (Effect),
   Effects,
   Type (..),
   Expr (..),
@@ -23,7 +23,9 @@ import Data.Text (Text)
 import GHC.Generics (Generic)
 
 -- | エフェクトの定義
-data Effect = Effect Text deriving (Show, Eq, Ord, Generic) -- Modified to take Text
+data Effect
+  = Effect Text
+  deriving (Show, Eq, Ord, Generic)
 
 -- | コンストラクタ定義
 data ConstructorDef = ConstructorDef Text Type deriving (Show, Eq, Generic)
@@ -108,6 +110,7 @@ data TypeError
   | UnboundVariable Text -- 未定義の変数
   | CannotInferType Expr -- 型を推論できない
   | UndefinedEffect Text -- 未定義のエフェクト
+  | UndefinedEffectOperator Text -- Added UndefinedEffectOperator
   | EffectMismatch Effects Effects -- エフェクトが一致しない (実際のエフェクト, 期待されるエフェクト)
   | NonExhaustiveLambdaPattern Text -- ラムダのパターンが網羅的でない (不足しているケース/型)
   | CustomErrorType Text -- カスタムメッセージ

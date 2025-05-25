@@ -12,6 +12,7 @@ import Language.Memento.Parser.Core (
   lowerIdentifier,
   number,
   parens,
+  rword,
   symbol,
   upperIdentifier,
  )
@@ -53,7 +54,8 @@ patternParser =
 -}
 clauseParser :: Parser Expr -> Parser Clause
 clauseParser exprParser = lexeme $ do
-  pat <- parens patternParser -- Pattern enclosed in parentheses
+  rword "let"
+  pat <- patternParser -- Pattern enclosed in parentheses
   symbol "->"
   ex <- exprParser -- Use the passed parser
   return $ Clause pat ex

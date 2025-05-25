@@ -32,8 +32,8 @@ import Language.Memento.TypeChecker.Types
 {- | Type check a single expression (e.g., for testing or REPL)
 This function is simplified as tsEffects is not part of TypeState for accumulation here.
 -}
-typeCheck :: Expr -> Either TypeError (Type, Effects)
-typeCheck expr = evalState (runExceptT (inferType expr)) initialState
+typeCheck :: Expr -> Maybe Type -> Either TypeError (Type, Effects)
+typeCheck expr mExpectedType = evalState (runExceptT (inferType expr mExpectedType)) initialState
 
 -- | Type check a whole program
 typeCheckProgram :: Program -> Either TypeError (Map Text Type)
@@ -72,7 +72,7 @@ typeCheckProgram (Program definitions) = evalState (runExceptT go) initialState
   checkValDefBody :: [(Text, Type)] -> Definition -> TypeCheck [(Text, Type)]
   checkValDefBody acc def = case def of
     ValDef name declType exprBody -> do
-      (inferredBodyType, inferredBodyEffects) <- inferType exprBody
+      (inferredBodyType, inferredBodyEffects) <- inferType exprBody (Just declType)
       unify declType inferredBodyType
       unless (Set.null inferredBodyEffects) $
         throwError $
