@@ -15,7 +15,7 @@ effect ThrowE [
 // c_func: Takes a number, applies NumBool, then BoolNum if true, else returns 100.
 // Effects: <Trans>
 val c_func : (number -> number with <Trans, ThrowE>) := input_n -> (
-  input_n |> (do NumBool) |> x_nb
+  input_n |> (do NumBool) |> x_nb : bool
   -> if (x_nb) then (
     true |> (do BoolNum)
   ) else (

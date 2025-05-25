@@ -1,0 +1,10 @@
+// examples/adt_simple_def.mmt
+
+// Define a simple ADT for optional numbers
+data NumBool [
+  SomeNum : number -> NumBool,
+];
+
+val extract_num : (NumBool -> number) := (SomeNum n) -> n;
+
+val main : number -> number := tmp -> 42 |> SomeNum |> extract_num;

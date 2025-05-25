@@ -45,6 +45,7 @@ patternParser =
         PWildcard <$ symbol "_"
       , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
         PVar <$> lowerIdentifier -- 小文字で始まる識別子
+      , parens patternParser
       ]
 
 {- | match節のパーサー
