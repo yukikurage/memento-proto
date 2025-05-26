@@ -33,4 +33,4 @@ finalExecutionBlock definitions =
           let lastDefName = (\(ValDef name _ _) -> name) (last valDefs)
               mainDefExists = any (\(ValDef name _ _) -> name == "main") valDefs
               nameToExecute = if mainDefExists then "main" else lastDefName
-           in T.concat ["\n\nconsole.log(globalHandler(", nameToExecute, "()));"]
+           in T.concat ["\n\nconsole.log(JSON.stringify(globalHandler(", nameToExecute, "())));"]

@@ -43,23 +43,23 @@ checkPatternAndGetBindings pattern mExpectedType = case pattern of
       Just TBool -> return ([], TBool)
       Just other -> throwError $ TypeMismatch other TBool
       Nothing -> return ([], TBool) -- Default to TBool if no expected type
-  PConstructor consName nestedPattern -> do -- Changed varName to nestedPattern
+  PConstructor consName nestedPattern -> do
+    -- Changed varName to nestedPattern
     adtEnv <- getAdtEnv
     -- Retrieve constructor signature (argType and resultADT)
     -- Assuming getConstructorSignature is available or logic is inlined:
     -- For simplicity, directly look up from tsEnv. A dedicated getConstructorSignature helper would be cleaner.
     globalEnv <- getEnv
-    (argType, resultADT@(TAlgebraicData adtName)) <- case Map.lookup consName globalEnv of
+    (argType, resultADT) <- case Map.lookup consName globalEnv of
       Just (TFunction at rtTuple) -> case rtTuple of
-        (rADT@(TAlgebraicData an), _effs) -> return (at, rADT)
-        (otherType, _effs) -> throwError $ CustomErrorType $ "Constructor " <> consName <> " does not return an ADT. Got: " <> T.pack (show otherType)
+        (rADT, _effs) -> return (at, rADT)
       Just other -> throwError $ CustomErrorType $ "Constructor " <> consName <> " is not a function type in env: " <> T.pack (show other)
       Nothing -> throwError $ UnboundVariable consName
 
     -- Validate the constructor's ADT type against the expected type for the whole PConstructor pattern
     case mExpectedType of
       Just expectedAdt@(TAlgebraicData expectedAdtName) ->
-        unless (adtName == expectedAdtName && resultADT == expectedAdt) $ throwError $ TypeMismatch expectedAdt resultADT
+        unless (resultADT == expectedAdt) $ throwError $ TypeMismatch expectedAdt resultADT
       Just other -> throwError $ TypeMismatch other resultADT
       Nothing -> return ()
 
