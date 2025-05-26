@@ -84,7 +84,7 @@ definitionParser :: Parser Definition
 definitionParser =
   lexeme $
     choice
-      [ try valDefinitionParser
-      , try dataDefinitionParser
-      , try effectDefinitionParser
+      [ valDefinitionParser
+      , dataDefinitionParser
+      , effectDefinitionParser
       ]

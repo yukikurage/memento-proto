@@ -25,19 +25,12 @@ patternParser :: Parser Pattern
 patternParser =
   lexeme $
     choice
-      [ try (PNumber <$> number) -- 数値パターン
-      , try (PBool True <$ symbol "true") -- trueパターン
-      , try (PBool False <$ symbol "false") -- falseパターン
+      [ PNumber <$> number -- 数値パターン
+      , PBool True <$ symbol "true" -- trueパターン
+      , PBool False <$ symbol "false" -- falseパターン
       , -- タプルパターン: [p1, p2, ...]
-        try $ PTuple <$> brackets (patternParser `sepBy` symbol ",")
+        PTuple <$> brackets (patternParser `sepBy` symbol ",")
       , -- コンストラクタパターン: ConstructorName varName
-        -- Note: Original PConstructor was `identifier >> identifier`.
-        -- This implies a constructor name followed by a single variable name.
-        -- For example, `Just x` or `Cons y`. If it's a nullary constructor
-        -- like `Nothing`, it might be intended to be `PConstructor "Nothing" "someImplicitOrIgnoredVar"`.
-        -- Or, more likely, for nullary constructors, it should be `PConstructor "Nothing" ""`,
-        -- or the PConstructor type/parsing should be more flexible.
-        -- For now, sticking to the existing structure for PConstructor.
         try $ do
           constructorName <- upperIdentifier -- 大文字で始まる識別子
           varName <- lowerIdentifier -- 小文字で始まる識別子

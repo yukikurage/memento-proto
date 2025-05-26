@@ -60,7 +60,7 @@ number =
 
 -- | 予約語
 rword :: Text -> Parser ()
-rword w = (lexeme . try) (string w *> notFollowedBy alphaNumChar)
+rword w = try $ lexeme (string w *> notFollowedBy (alphaNumChar <|> char '_'))
 
 -- | 予約語のリスト
 reservedWords :: [Text]
@@ -68,7 +68,7 @@ reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "do", 
 
 -- | 識別子
 identifier :: Parser Text
-identifier = (lexeme . try) $ do
+identifier = try $ lexeme $ do
   name <- T.pack <$> ((:) <$> letterChar <*> many (alphaNumChar <|> char '_'))
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
@@ -76,7 +76,7 @@ identifier = (lexeme . try) $ do
 
 -- | lowerIdentifier (先頭が小文字の識別子)
 lowerIdentifier :: Parser Text
-lowerIdentifier = (lexeme . try) $ do
+lowerIdentifier = try $ lexeme $ do
   fc <- lowerChar
   rest <- many (alphaNumChar <|> char '_')
   let name = T.pack (fc : rest)
@@ -86,12 +86,10 @@ lowerIdentifier = (lexeme . try) $ do
 
 -- | upperIdentifier (先頭が大文字の識別子)
 upperIdentifier :: Parser Text
-upperIdentifier = (lexeme . try) $ do
+upperIdentifier = try $ lexeme $ do
   fc <- upperChar
   rest <- many (alphaNumChar <|> char '_')
   let name = T.pack (fc : rest)
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
-
--- 旧識別子パーサーは削除し、lowerIdentifierとupperIdentifierに統一

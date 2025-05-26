@@ -39,7 +39,7 @@ typeTerm :: Parser Type
 typeTerm =
   choice
     [ tupleTypeParser -- Added tupleTypeParser
-    , try $ parens typeExpr -- Recursive call to the new typeExpr
+    , parens typeExpr -- Recursive call to the new typeExpr
     , TNumber <$ rword "number"
     , TBool <$ rword "bool"
     , TAlgebraicData <$> upperIdentifier -- 大文字で始まる識別子

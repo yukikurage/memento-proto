@@ -48,7 +48,7 @@ import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if s
 
 -- | オペランドのパーサー (op function)
 op :: Text -> Parser Text
-op n = (lexeme . try) (string n <* notFollowedBy (symbolChar <|> punctuationChar))
+op n = try $ lexeme (string n <* notFollowedBy (symbolChar <|> punctuationChar))
 
 -- | 演算子の優先順位テーブル
 operatorTable :: [[Operator Parser Expr]]
@@ -74,7 +74,7 @@ operatorTable =
 
 -- | if式
 ifExpr :: Parser Expr
-ifExpr = (lexeme . try) $ do
+ifExpr = lexeme $ do
   rword "if"
   cond <- term -- Changed from expr to term to avoid direct left-recursion with operatorTable
   rword "then"
@@ -96,7 +96,7 @@ lambdaExpr = do
 
 -- | do構文
 doExpr :: Parser Expr
-doExpr = (lexeme . try) $ do
+doExpr = lexeme $ do
   rword "do"
   name <- upperIdentifier -- 大文字で始まる識別子
   return $ Do name
@@ -157,11 +157,11 @@ term :: Parser Expr
 term =
   choice
     [ tupleExprParser -- Added tupleExprParser
-    , try $ parens expr -- Recursive call to expr
-    , try lambdaExpr
-    , try doExpr
+    , parens expr -- Recursive call to expr
+    , lambdaExpr
+    , doExpr
     , matchExprParser
-    , try handlerExprParser
+    , handlerExprParser
     , ifExpr
     , Var <$> identifier
     , Number <$> number
