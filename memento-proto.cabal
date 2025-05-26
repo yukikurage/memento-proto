@@ -94,6 +94,7 @@ test-suite memento-proto-test
     containers,
     directory,
     filepath,
+    hspec,
     megaparsec,
     memento-proto,
     mtl,

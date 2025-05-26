@@ -142,6 +142,8 @@ resolveType typ currentAdtName currentEffectName = do
         throwError $
           CustomErrorType $
             "Undefined algebraic data type: " <> name
+    TTuple types -> do
+      forM_ types $ \t -> resolveType t currentAdtName currentEffectName
 
 -- | エフェクトのサブタイピングをチェック
 isSubEffects :: Effects -> Effects -> Bool

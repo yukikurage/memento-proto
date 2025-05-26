@@ -1,0 +1,40 @@
+data NumList [
+  NilN : [] -> NumList,
+  ConsN : [number, NumList] -> NumList,
+];
+
+val array_102 : NumList := ConsN <| [1, ConsN <| [0, ConsN <| [2, NilN <| []]]];
+
+val append : [NumList, NumList] -> NumList
+  := branch [NumList, NumList] [
+    let [NilN _, right]
+      -> right,
+    let [ConsN [x, xs], right]
+      -> [x, [xs, right] |> append] |> ConsN
+  ];
+
+effect NonDet [
+  Choose : [number, number] -> number with <NonDet>,
+  Abort : [] -> number with <NonDet>
+];
+
+val handle_nondet 
+  : number with <NonDet> => NumList
+  := handle : (number with <NonDet> => NumList) [
+    (x) -> ConsN <| [x, NilN <| []],
+    (xs |> Choose |> k) 
+      -> xs |> let [left, right] 
+      -> [left |> k, right |> k] |> append,
+    (x |> Abort |> k) -> [] |> NilN
+  ];
+
+val program : [] -> number with <NonDet>
+  := let _ 
+  -> [3, 2] |> do Choose |> let x
+  -> [1, 2] |> do Choose |> let y
+  -> [1, 1] |> do Choose |> let z
+  -> if (x + y + z == 5) then (x * y * z) else ([] |> do Abort);
+
+val main : number -> NumList 
+  := let _
+  -> [] |> program |>> handle_nondet;

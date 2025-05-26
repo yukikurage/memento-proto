@@ -49,4 +49,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - memento-proto 
-        - hspec # Add this line
+    - hspec # Add this line

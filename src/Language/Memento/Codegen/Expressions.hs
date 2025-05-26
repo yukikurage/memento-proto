@@ -22,12 +22,12 @@ partitionHandlerClausesForCodegen clauses = go clauses ([], [])
     HandlerClause{} -> go cs (ops ++ [c], rets)
     HandlerReturnClause{} -> go cs (ops, rets ++ [c])
 
-generatePattern :: T.Text -> Pattern -> (T.Text, [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
+generatePattern :: T.Text -> Pattern -> ([T.Text], [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
 generatePattern scrutineeExpr = \case
   PNumber n ->
-    (T.concat [scrutineeExpr, " === ", T.pack (show n)], [])
+    ([scrutineeExpr, " === ", T.pack (show n)], [])
   PBool b ->
-    (T.concat [scrutineeExpr, " === ", T.pack (if b then "true" else "false")], [])
+    ([scrutineeExpr, " === ", T.pack (if b then "true" else "false")], [])
   PTuple subPatterns ->
     let processSubPattern index pat =
           let elementScrutinee = T.concat [scrutineeExpr, "[", T.pack (show index), "]"]
@@ -38,21 +38,19 @@ generatePattern scrutineeExpr = \case
         subConditions = map fst results
         subBindingsList = map snd results
 
-        fullCondition = T.intercalate " && " subConditions
         allBindings = concat subBindingsList
-     in (fullCondition, allBindings)
-  PConstructor consName varName ->
+     in (concat subConditions, allBindings)
+  PConstructor consName pattern ->
     -- Assuming ADT representation: [constructorName, value]
     let
       condition = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
-      bindings =
-        ([(varName, T.concat [scrutineeExpr, "[1]"]) | varName /= "_"]) -- Bind to first payload element
+      (subCondition, bindings) = generatePattern (T.concat [scrutineeExpr, "[1]"]) pattern
      in
-      (condition, bindings)
+      ([condition] <> subCondition, bindings)
   PVar varName ->
-    (T.pack "true", [(varName, scrutineeExpr)])
+    ([], [(varName, scrutineeExpr)])
   PWildcard ->
-    (T.pack "true", [])
+    ([], [])
 
 generateBindings :: [(T.Text, T.Text)] -> T.Text
 generateBindings bindings =
@@ -60,7 +58,7 @@ generateBindings bindings =
     then T.empty
     else T.unlines (map (\(var, val) -> T.concat [T.pack "    const ", var, T.pack " = ", val, T.pack ";"]) bindings)
 
-generateClause :: String -> Clause -> (T.Text, T.Text, T.Text) -- (condition, bindingsJs, branchJs)
+generateClause :: String -> Clause -> ([T.Text], T.Text, T.Text) -- (condition, bindingsJs, branchJs)
 generateClause matchArgName (Clause pattern branchExpr) =
   let (condition, bindings) = generatePattern (T.pack matchArgName) pattern
       bindingsJs = generateBindings bindings
@@ -116,7 +114,7 @@ generateExpr = \case
         bodyJs = generateExpr body
      in T.unlines
           [ "ret(function(" <> lambdaArgName <> ") {"
-          , "  if (!(" <> conditionJs <> ")) {"
+          , "  if (!(" <> (if null conditionJs then "true" else T.intercalate " && " conditionJs) <> ")) {"
           , "    throw new Error('Lambda argument pattern mismatch. Value: ' + JSON.stringify(" <> lambdaArgName <> "));"
           , "  }"
           , bindingsJs
@@ -157,9 +155,9 @@ generateExpr = \case
           , T.intercalate
               (T.pack " else ")
               ( map
-                  ( \(cond, bindingsBlock, branchBlock) ->
+                  ( \(conds, bindingsBlock, branchBlock) ->
                       T.unlines
-                        [ T.concat [T.pack "  if (", cond, T.pack ") {"]
+                        [ T.concat [T.pack "  if (", if null conds then "true" else T.intercalate " && " conds, T.pack ") {"]
                         , bindingsBlock
                         , T.concat [T.pack "    _result = ", branchBlock, T.pack ";"]
                         , T.pack "  }"
