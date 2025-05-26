@@ -6,7 +6,7 @@ module Language.Memento.Parser.Expressions (
   ifExpr,
   lambdaExpr,
   doExpr,
-  matchExprParser,
+  branchExprParser, -- Renamed from matchExprParser
   handlerExprParser,
   operatorTable, -- Exported for use in Patterns if ever needed, though likely not.
 ) where
@@ -27,9 +27,9 @@ import Language.Memento.Parser.Core (
   upperIdentifier,
  )
 
-import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
-import Language.Memento.Parser.Types (typeExpr, typeTerm)
-import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
+import Language.Memento.Parser.Patterns (patternParser) -- Removed clauseParser, patternParser is used by letClauseParser
+import Language.Memento.Parser.Types (typeExpr, typeTerm) -- typeExpr for branch annotation, typeTerm for lambda
+import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..), Clause(..)) -- Added Clause for letClauseParser
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if still needed
@@ -101,15 +101,27 @@ doExpr = lexeme $ do
   name <- upperIdentifier -- 大文字で始まる識別子
   return $ Do name
 
-{- | match式のパーサー
-例: branch myValue [ (Some x) -> x, (None) -> 0 ]
+-- Define this before branchExprParser
+letClauseParser :: Parser Expr -> Parser Clause -- Takes expr parser as argument
+letClauseParser pExpr = lexeme $ do
+  rword "let"
+  patt <- patternParser
+  symbol "->"
+  Clause patt <$> pExpr
+
+{- | branch式のパーサー (previously matchExprParser)
+例: branch [: SomeType -> OtherType] [ let (Some x) -> x, let (None) -> 0 ]
 -}
-matchExprParser :: Parser Expr
-matchExprParser = lexeme $ do
+branchExprParser :: Parser Expr -- Renamed
+branchExprParser = lexeme $ do
   rword "branch"
-  scrutineeType <- typeTerm -- This parses a Type literal.
-  clauses <- brackets (sepBy (clauseParser expr) (symbol ",")) -- Pass expr to clauseParser
-  return $ Match scrutineeType clauses
+  -- Optional type annotation for the branch construct itself
+  mOverallTypeAnn <- optional $ symbol ":" *> typeExpr
+  
+  -- Clauses, each starting with 'let'
+  clauses <- brackets (sepBy (letClauseParser expr) (symbol ","))
+  
+  return $ Branch mOverallTypeAnn clauses
 
 {- | ハンドラ節のパーサー
 例:
@@ -160,7 +172,7 @@ term =
     , parens expr -- Recursive call to expr
     , lambdaExpr
     , doExpr
-    , matchExprParser
+    , branchExprParser -- new
     , handlerExprParser
     , ifExpr
     , Var <$> identifier
