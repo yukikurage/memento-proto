@@ -63,7 +63,7 @@ data Expr
   | Apply Expr Expr -- 関数適用
   | HandleApply Expr Expr -- ハンドル適用 (ハンドラ, 引数)
   | Do Text -- do name 構文
-  | Branch (Maybe Type) [Clause] -- new, for optional function type annotation
+  | Match Type [Clause] -- match式 (マッチする型, clauses)
   | Handle Type [HandlerClause] -- ハンドル式 (期待されるハンドラの型 (Function), ハンドラ節)
   | Tuple [Expr] -- タプルリテラル
   deriving (Show, Eq, Generic)

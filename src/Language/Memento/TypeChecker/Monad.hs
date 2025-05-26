@@ -34,15 +34,13 @@ import Data.Text (Text)
 import qualified Data.Text as T -- Added for resolveType, extractConstructorType etc.
 import Language.Memento.Syntax (Effect (..), Effects, Type (..), TypeError (..))
 import Language.Memento.TypeChecker.Types (AdtInfo, ConstructorSignature, EffectInfo, OperatorSignature)
-import Language.Memento.TypeChecker.InferTypes (TCType) -- Added TCType import
 
 -- | Type checking state
 data TypeState = TypeState
-  { tsEnv :: Map Text TCType -- Changed Type to TCType
+  { tsEnv :: Map Text Type -- Type environment for variables and constructors
   , tsAdtEnv :: Map Text AdtInfo -- Environment for ADT definitions
   , tsEffectEnv :: Map Text EffectInfo -- Environment for Effect definitions
   , tsOperatorEnv :: Map Text OperatorSignature -- Environment for Operator definitions
-  , tsFreshCounter :: Int     -- Added for fresh type variable generation
   }
 
 -- | Type checking monad: Error handling + State (for environment)
@@ -50,20 +48,14 @@ type TypeCheck a = ExceptT TypeError (State TypeState) a
 
 -- | Initial state for type checking
 initialState :: TypeState
-initialState = TypeState
-  { tsEnv = Map.empty -- Now Map Text TCType
-  , tsAdtEnv = Map.empty
-  , tsEffectEnv = Map.empty
-  , tsOperatorEnv = Map.empty
-  , tsFreshCounter = 0 -- Initialize counter
-  }
+initialState = TypeState{tsEnv = Map.empty, tsAdtEnv = Map.empty, tsEffectEnv = Map.empty, tsOperatorEnv = Map.empty}
 
 -- | Get the current type environment for variables and constructors
-getEnv :: TypeCheck (Map Text TCType) -- Changed return type
+getEnv :: TypeCheck (Map Text Type)
 getEnv = gets tsEnv
 
 -- | Add a binding to the variable/constructor type environment
-addBinding :: Text -> TCType -> TypeCheck () -- Changed Type to TCType
+addBinding :: Text -> Type -> TypeCheck ()
 addBinding name typ = modify $ \st -> st{tsEnv = Map.insert name typ (tsEnv st)}
 
 -- | Add an ADT definition to the ADT environment
@@ -91,7 +83,7 @@ addOperatorInfo :: Text -> OperatorSignature -> TypeCheck ()
 addOperatorInfo name operatorInfo = modify $ \st -> st{tsOperatorEnv = Map.insert name operatorInfo (tsOperatorEnv st)}
 
 -- | Run a computation in a temporarily extended environment
-withBinding :: Text -> TCType -> TypeCheck a -> TypeCheck a -- Changed Type to TCType
+withBinding :: Text -> Type -> TypeCheck a -> TypeCheck a
 withBinding name typ action = do
   oldEnv <- getEnv
   addBinding name typ
@@ -100,16 +92,13 @@ withBinding name typ action = do
   return result
 
 -- | Run a computation in an environment temporarily extended with multiple bindings
-withBindings :: [(Text, TCType)] -> TypeCheck a -> TypeCheck a -- Changed bindings to [(Text, TCType)]
+withBindings :: [(Text, Type)] -> TypeCheck a -> TypeCheck a
 withBindings bindings action = do
   oldEnv <- getEnv
   mapM_ (uncurry addBinding) bindings
   result <- action
   modify $ \st -> st{tsEnv = oldEnv} -- Restore original environment
   return result
-
-// TODO: The functions below still use 'Type' and will need adaptation in future steps.
-// For this subtask, they remain unchanged as per instructions.
 
 -- Functions moved from Language.Memento.TypeChecker.Types
 
