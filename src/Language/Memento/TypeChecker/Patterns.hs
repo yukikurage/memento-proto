@@ -43,26 +43,30 @@ checkPatternAndGetBindings pattern mExpectedType = case pattern of
       Just TBool -> return ([], TBool)
       Just other -> throwError $ TypeMismatch other TBool
       Nothing -> return ([], TBool) -- Default to TBool if no expected type
-  PConstructor consName varName -> do
-    env <- getEnv
+  PConstructor consName nestedPattern -> do -- Changed varName to nestedPattern
     adtEnv <- getAdtEnv
-    consType <- case Map.lookup consName env of -- Constructor types should be in the main env
-      Just (TFunction argType (resultADT@(TAlgebraicData adtName), _)) -> do
-        -- Check if this constructor belongs to the expected ADT type if provided
-        case mExpectedType of
-          Just expectedADT@(TAlgebraicData expectedAdtName) ->
-            if adtName == expectedAdtName
-              then return (TFunction argType (resultADT, Set.empty))
-              else throwError $ TypeMismatch expectedADT resultADT
-          Just other -> throwError $ TypeMismatch other resultADT -- Expected an ADT but got something else
-          Nothing -> return (TFunction argType (resultADT, Set.empty)) -- No expected type, use the constructor's own ADT type
-      Just other -> throwError $ CustomErrorType $ "Constructor '" <> consName <> "' is not a function type: " <> T.pack (show other)
+    -- Retrieve constructor signature (argType and resultADT)
+    -- Assuming getConstructorSignature is available or logic is inlined:
+    -- For simplicity, directly look up from tsEnv. A dedicated getConstructorSignature helper would be cleaner.
+    globalEnv <- getEnv
+    (argType, resultADT@(TAlgebraicData adtName)) <- case Map.lookup consName globalEnv of
+      Just (TFunction at rtTuple) -> case rtTuple of
+        (rADT@(TAlgebraicData an), _effs) -> return (at, rADT)
+        (otherType, _effs) -> throwError $ CustomErrorType $ "Constructor " <> consName <> " does not return an ADT. Got: " <> T.pack (show otherType)
+      Just other -> throwError $ CustomErrorType $ "Constructor " <> consName <> " is not a function type in env: " <> T.pack (show other)
       Nothing -> throwError $ UnboundVariable consName
 
-    case consType of
-      TFunction argType (resultADT, _) ->
-        return ([(varName, argType)], resultADT) -- The pattern matches the resultADT type
-      _ -> error "Internal error: Constructor type was not TFunction after lookup"
+    -- Validate the constructor's ADT type against the expected type for the whole PConstructor pattern
+    case mExpectedType of
+      Just expectedAdt@(TAlgebraicData expectedAdtName) ->
+        unless (adtName == expectedAdtName && resultADT == expectedAdt) $ throwError $ TypeMismatch expectedAdt resultADT
+      Just other -> throwError $ TypeMismatch other resultADT
+      Nothing -> return ()
+
+    -- Recursively check the nested pattern, expecting the constructor's argument type
+    (nestedBindings, nestedPatternType) <- checkPatternAndGetBindings nestedPattern (Just argType)
+    unify argType nestedPatternType -- Ensure the nested pattern actually matches the argument type
+    return (nestedBindings, resultADT) -- Bindings from nested, overall type is the ADT
   PTuple ps -> do
     case mExpectedType of
       Just (TTuple expectedTypes) -> do
@@ -122,7 +126,7 @@ checkPatternCoverage typ patterns = case typ of
     let (coveredConstructors, hasWildcardOrVar) =
           foldr
             ( \p (accSet, accBool) -> case p of
-                PConstructor cn _ -> (Set.insert cn accSet, accBool)
+                PConstructor cn _nestedPattern -> (Set.insert cn accSet, accBool) -- Correctly ignore nested pattern for this check
                 PVar _ -> (accSet, True)
                 PWildcard -> (accSet, True)
                 _ -> (accSet, accBool)

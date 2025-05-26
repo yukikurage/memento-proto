@@ -33,8 +33,9 @@ patternParser =
       , -- コンストラクタパターン: ConstructorName varName
         try $ do
           constructorName <- upperIdentifier -- 大文字で始まる識別子
-          varName <- lowerIdentifier -- 小文字で始まる識別子
-          return $ PConstructor constructorName varName
+          -- Changed to parse a nested pattern instead of just a variable name
+          pat <- patternParser -- 小文字で始まる識別子または他のパターン
+          return $ PConstructor constructorName pat
       , -- ワイルドカードパターン: _
         PWildcard <$ symbol "_"
       , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
