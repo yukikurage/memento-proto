@@ -11,19 +11,19 @@ module Language.Memento.Codegen.Expressions (
 ) where
 
 import qualified Data.Text as T
-import Language.Memento.Syntax (BinOp (..), Clause (..), Expr (..), HandlerClause (..), Pattern (..), Type (..)) -- Added Type for Match
+import Language.Memento.Syntax (ArgumentWithMetadata (..), BinOp (..), Clause (..), ClauseWithMetadata (ClauseWithMetadata), Expr (..), ExprWithMetadata (..), HandlerClause (..), HandlerClauseWithMetadata (HandlerClauseWithMetadata), Pattern (..), PatternWithMetadata (..), Type (..), TypeVariable (TypeVariable), TypeVariableWithMetadata (TypeVariableWithMetadata), Variable (..), VariableWithMetadata (..)) -- Added Type for Match
 
 -- | Helper to partition HandlerClauses (specific to Codegen's needs)
-partitionHandlerClausesForCodegen :: [HandlerClause] -> ([HandlerClause], [HandlerClause])
+partitionHandlerClausesForCodegen :: [HandlerClauseWithMetadata] -> ([HandlerClauseWithMetadata], [HandlerClauseWithMetadata])
 partitionHandlerClausesForCodegen clauses = go clauses ([], [])
  where
   go [] acc = acc
   go (c : cs) (ops, rets) = case c of
-    HandlerClause{} -> go cs (ops ++ [c], rets)
-    HandlerReturnClause{} -> go cs (ops, rets ++ [c])
+    HandlerClauseWithMetadata (HandlerClause{}) _ -> go cs (ops ++ [c], rets)
+    HandlerClauseWithMetadata (HandlerReturnClause{}) _ -> go cs (ops, rets ++ [c])
 
-generatePattern :: T.Text -> Pattern -> ([T.Text], [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
-generatePattern scrutineeExpr = \case
+generatePattern :: T.Text -> PatternWithMetadata -> ([T.Text], [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
+generatePattern scrutineeExpr (PatternWithMetadata pattern _) = case pattern of
   PNumber n ->
     ([scrutineeExpr, " === ", T.pack (show n)], [])
   PBool b ->
@@ -40,14 +40,14 @@ generatePattern scrutineeExpr = \case
 
         allBindings = concat subBindingsList
      in (concat subConditions, allBindings)
-  PConstructor consName pattern ->
+  PConstructor (VariableWithMetadata (Variable consName) _) pattern ->
     -- Assuming ADT representation: [constructorName, value]
     let
       condition = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
       (subCondition, bindings) = generatePattern (T.concat [scrutineeExpr, "[1]"]) pattern
      in
       ([condition] <> subCondition, bindings)
-  PVar varName ->
+  PVar (ArgumentWithMetadata (Variable varName) _) ->
     ([], [(varName, scrutineeExpr)])
   PWildcard ->
     ([], [])
@@ -58,16 +58,16 @@ generateBindings bindings =
     then T.empty
     else T.unlines (map (\(var, val) -> T.concat [T.pack "    const ", var, T.pack " = ", val, T.pack ";"]) bindings)
 
-generateClause :: String -> Clause -> ([T.Text], T.Text, T.Text) -- (condition, bindingsJs, branchJs)
-generateClause matchArgName (Clause pattern branchExpr) =
+generateClause :: String -> ClauseWithMetadata -> ([T.Text], T.Text, T.Text) -- (condition, bindingsJs, branchJs)
+generateClause matchArgName (ClauseWithMetadata (Clause pattern branchExpr) _) =
   let (condition, bindings) = generatePattern (T.pack matchArgName) pattern
       bindingsJs = generateBindings bindings
       branchJs = generateExpr branchExpr -- generateExpr is from this module
    in (condition, bindingsJs, branchJs)
 
-generateExpr :: Expr -> T.Text
-generateExpr = \case
-  Var name -> T.concat ["ret(", name, ")"]
+generateExpr :: ExprWithMetadata -> T.Text
+generateExpr (ExprWithMetadata expr _) = case expr of
+  Var (VariableWithMetadata (Variable name) _) -> T.concat ["ret(", name, ")"]
   Number n -> T.concat ["ret(", T.pack $ show n, ")"]
   Bool b -> T.concat ["ret(", T.pack $ if b then "true" else "false", ")"]
   BinOp op e1 e2 ->
@@ -141,14 +141,12 @@ generateExpr = \case
           , funcExpr
           , ", (f) => f(v)))"
           ]
-  Do name ->
-    T.concat ["ret((v) => [\"op\", \"", name, "\", v, (v) => ret(v)])"]
-  Match adtType clauses ->
+  Match clauses ->
     -- adtType is Type from Syntax.hs
     let matchArg = "_matched_val_"
         generatedClauses = map (generateClause matchArg) clauses
         -- Use T.pack (show adtType) for error message
-        fallbackLogic = T.concat ["console.error('Non-exhaustive patterns for ", T.pack (show adtType), " with value: ', ", T.pack matchArg, "); ", "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value for ", T.pack (show adtType), "');"]
+        fallbackLogic = T.concat ["console.error('Non-exhaustive patterns with value: ', ", T.pack matchArg, "); ", "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value');"]
      in T.unlines
           [ T.pack "ret((" <> T.pack matchArg <> T.pack ") => {"
           , T.pack "  let _result;"
@@ -171,11 +169,11 @@ generateExpr = \case
           , T.pack "  return _result;"
           , T.pack "})"
           ]
-  Handle _ handlerClauses ->
+  Handle handlerClauses ->
     -- First arg of Handle is Type, ignored in codegen
     let (opClauses, returnClauses) = partitionHandlerClausesForCodegen handlerClauses
         returnClauseJs = case returnClauses of
-          (HandlerReturnClause retVar bodyExpr : _) ->
+          (HandlerClauseWithMetadata (HandlerReturnClause (ArgumentWithMetadata (Variable retVar) _) bodyExpr) _ : _) ->
             let bodyJs = generateExpr bodyExpr
              in T.unlines
                   [ "    const " <> retVar <> " = _handled_val_[1];"
@@ -188,15 +186,23 @@ generateExpr = \case
             else
               T.concat $
                 map
-                  ( \(HandlerClause opName argVar contVar bodyExpr) ->
-                      let bodyJs = generateExpr bodyExpr
-                       in T.unlines
-                            [ T.concat ["      if (_op_name_ === \"", opName, "\") {"]
-                            , "        const " <> argVar <> " = _op_arg_;"
-                            , "        const " <> contVar <> " = _op_cont_;"
-                            , "        return " <> bodyJs <> ";"
-                            , "      }"
-                            ]
+                  ( \( HandlerClauseWithMetadata
+                        ( HandlerClause
+                            (TypeVariableWithMetadata (TypeVariable opName) _)
+                            (ArgumentWithMetadata (Variable argVar) _)
+                            (ArgumentWithMetadata (Variable contVar) _)
+                            bodyExpr
+                          )
+                        _
+                      ) ->
+                        let bodyJs = generateExpr bodyExpr
+                         in T.unlines
+                              [ T.concat ["      if (_op_name_ === \"", opName, "\") {"]
+                              , "        const " <> argVar <> " = _op_arg_;"
+                              , "        const " <> contVar <> " = _op_cont_;"
+                              , "        return " <> bodyJs <> ";"
+                              , "      }"
+                              ]
                   )
                   opClauses
         defaultOpCaseJs = "      else {\n        return [\"op\", _op_name_, _op_arg_, _op_cont_];\n      }"

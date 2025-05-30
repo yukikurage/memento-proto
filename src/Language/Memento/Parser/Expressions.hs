@@ -5,7 +5,6 @@ module Language.Memento.Parser.Expressions (
   term,
   ifExpr,
   lambdaExpr,
-  doExpr,
   matchExprParser,
   handlerExprParser,
   operatorTable, -- Exported for use in Patterns if ever needed, though likely not.
@@ -20,16 +19,22 @@ import Language.Memento.Parser.Core (
   identifier,
   lexeme,
   lowerIdentifier,
+  lowerIdentifierArgument,
+  lowerIdentifierVariable,
+  newUniqueId,
   number,
   parens,
   rword,
   symbol,
   upperIdentifier,
+  upperIdentifierArgument,
+  upperIdentifierTypeVariable,
+  upperIdentifierVariable,
  )
 
 import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
 import Language.Memento.Parser.Types (typeExpr, typeTerm)
-import Language.Memento.Syntax (BinOp (..), Expr (..), HandlerClause (..))
+import Language.Memento.Syntax (BinOp (..), Expr (..), ExprMetadata (ExprMetadata), ExprWithMetadata (ExprWithMetadata), HandlerClause (..), HandlerClauseMetadata (HandlerClauseMetadata), HandlerClauseWithMetadata (HandlerClauseWithMetadata))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if still needed
@@ -50,41 +55,55 @@ import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if s
 op :: Text -> Parser Text
 op n = try $ lexeme (string n <* notFollowedBy (symbolChar <|> punctuationChar))
 
+mkOperator ::
+  (ExprWithMetadata -> ExprWithMetadata -> Expr) ->
+  Parser
+    (ExprWithMetadata -> ExprWithMetadata -> ExprWithMetadata)
+mkOperator opParser = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ \left right -> ExprWithMetadata (opParser left right) (ExprMetadata sp uniqueId)
+
 -- | 演算子の優先順位テーブル
-operatorTable :: [[Operator Parser Expr]]
+operatorTable :: [[Operator Parser ExprWithMetadata]]
 operatorTable =
   [
-    [ InfixL (BinOp Mul <$ op "*")
-    , InfixL (BinOp Div <$ op "/")
+    [ InfixL (mkOperator (BinOp Mul) <* op "*")
+    , InfixL (mkOperator (BinOp Div) <* op "/")
     ]
   ,
-    [ InfixL (BinOp Add <$ op "+")
-    , InfixL (BinOp Sub <$ op "-")
+    [ InfixL (mkOperator (BinOp Add) <* op "+")
+    , InfixL (mkOperator (BinOp Sub) <* op "-")
     ]
   ,
-    [ InfixN (BinOp Eq <$ op "==")
-    , InfixN (BinOp Lt <$ op "<")
-    , InfixN (BinOp Gt <$ op ">")
+    [ InfixN (mkOperator (BinOp Eq) <* op "==")
+    , InfixN (mkOperator (BinOp Lt) <* op "<")
+    , InfixN (mkOperator (BinOp Gt) <* op ">")
     ]
-  , [InfixR (Apply <$ op "<|")]
-  , [InfixL (flip Apply <$ op "|>")]
-  , [InfixR (HandleApply <$ op "<<|")]
-  , [InfixL (flip HandleApply <$ op "|>>")]
+  , [InfixR (mkOperator Apply <* op "<|")]
+  , [InfixL (mkOperator (flip Apply) <* op "|>")]
+  , [InfixR (mkOperator HandleApply <* op "<<|")]
+  , [InfixL (mkOperator (flip HandleApply) <* op "|>>")]
   ]
 
 -- | if式
-ifExpr :: Parser Expr
+ifExpr :: Parser ExprWithMetadata
 ifExpr = lexeme $ do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   rword "if"
   cond <- term -- Changed from expr to term to avoid direct left-recursion with operatorTable
   rword "then"
   thenExpr <- term -- Changed from expr to term
   rword "else"
-  If cond thenExpr <$> term -- Changed from expr to term
+  elseExpr <- term -- Changed from expr to term
+  return $ ExprWithMetadata (If cond thenExpr elseExpr) (ExprMetadata sp uniqueId) -- Changed from expr to term
 
 -- | ラムダ式
-lambdaExpr :: Parser Expr
+lambdaExpr :: Parser ExprWithMetadata
 lambdaExpr = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   rword "let"
   patt <- patternParser -- Changed from lowerIdentifier to patternParser
   mType <- optional $ do
@@ -92,86 +111,95 @@ lambdaExpr = do
     typeTerm -- from Types
   void $ symbol "->"
   body <- expr -- Recursive call to expr
-  return $ Lambda patt mType body
-
--- | do構文
-doExpr :: Parser Expr
-doExpr = lexeme $ do
-  rword "do"
-  name <- upperIdentifier -- 大文字で始まる識別子
-  return $ Do name
+  return $ ExprWithMetadata (Lambda patt mType body) (ExprMetadata sp uniqueId)
 
 {- | match式のパーサー
 例: branch myValue [ (Some x) -> x, (None) -> 0 ]
 -}
-matchExprParser :: Parser Expr
+matchExprParser :: Parser ExprWithMetadata
 matchExprParser = lexeme $ do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   rword "branch"
-  scrutineeType <- typeTerm -- This parses a Type literal.
   clauses <- brackets (sepBy (clauseParser expr) (symbol ",")) -- Pass expr to clauseParser
-  return $ Match scrutineeType clauses
+  return $ ExprWithMetadata (Match clauses) (ExprMetadata sp uniqueId)
 
 {- | ハンドラ節のパーサー
 例:
   (n |> NumBool |> k) -> n > 0 |> k
   (x) -> x |> Right
 -}
-handlerClauseParser :: Parser HandlerClause
+handlerClauseParser :: Parser HandlerClauseWithMetadata
 handlerClauseParser = lexeme $ do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   symbol "("
-  clause <-
-    try
-      ( do
-          argVar <- lowerIdentifier -- 小文字で始まる識別子
-          symbol "|>"
-          opName <- upperIdentifier -- 大文字で始まる識別子
-          symbol "|>"
-          kVar <- lowerIdentifier -- 小文字で始まる識別子
-          symbol ")"
-          symbol "->"
-          body <- expr -- Recursive call to expr
-          return $ HandlerClause opName argVar kVar body
-      )
-      <|> ( do
-              retVar <- lowerIdentifier -- 小文字で始まる識別子
-              symbol ")"
-              symbol "->"
-              body <- expr -- Recursive call to expr
-              return $ HandlerReturnClause retVar body
-          )
-  return clause
+  try
+    ( do
+        argVar <- lowerIdentifierArgument -- 小文字で始まる識別子
+        symbol "|>"
+        opName <- upperIdentifierTypeVariable -- 大文字で始まる識別子
+        symbol "|>"
+        kVar <- lowerIdentifierArgument -- 小文字で始まる識別子
+        symbol ")"
+        symbol "->"
+        body <- expr -- Recursive call to expr
+        return $ HandlerClauseWithMetadata (HandlerClause opName argVar kVar body) (HandlerClauseMetadata sp uniqueId)
+    )
+    <|> ( do
+            retVar <- lowerIdentifierArgument -- 小文字で始まる識別子
+            symbol ")"
+            symbol "->"
+            body <- expr -- Recursive call to expr
+            return $ HandlerClauseWithMetadata (HandlerReturnClause retVar body) (HandlerClauseMetadata sp uniqueId)
+        )
 
 {- | ハンドル式のパーサー
 例: handle <Trans, Throw> [ (n |> NumBool |> k) -> n > 0 |> k, (x) -> x |> Right ]
 -}
-handlerExprParser :: Parser Expr
+handlerExprParser :: Parser ExprWithMetadata
 handlerExprParser = lexeme $ do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   rword "handle"
-  symbol ":"
-  handlerType <- typeExpr -- from Types
   clauses <- brackets (sepBy handlerClauseParser (symbol ","))
-  return $ Handle handlerType clauses
+  return $ ExprWithMetadata (Handle clauses) (ExprMetadata sp uniqueId)
 
 -- | 項
-term :: Parser Expr
+term :: Parser ExprWithMetadata
 term =
   choice
-    [ tupleExprParser -- Added tupleExprParser
-    , parens expr -- Recursive call to expr
-    , lambdaExpr
-    , doExpr
+    [ lambdaExpr
     , matchExprParser
     , handlerExprParser
     , ifExpr
-    , Var <$> identifier
-    , Number <$> number
-    , Bool <$> (True <$ rword "true" <|> False <$ rword "false")
+    , tupleExprParser -- Added tupleExprParser
+    , parens expr -- Recursive call to expr
+    , do
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        name <- upperIdentifierVariable <|> lowerIdentifierVariable
+        return $ ExprWithMetadata (Var name) (ExprMetadata sp uniqueId)
+    , do
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        number <- number
+        return $ ExprWithMetadata (Number number) (ExprMetadata sp uniqueId)
+    , do
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        bool <- True <$ rword "true" <|> False <$ rword "false"
+        return $ ExprWithMetadata (Bool bool) (ExprMetadata sp uniqueId)
     ]
 
 -- | タプル式のパーサー
-tupleExprParser :: Parser Expr
-tupleExprParser = Tuple <$> brackets (sepBy expr (symbol ","))
+tupleExprParser :: Parser ExprWithMetadata
+tupleExprParser = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  exprs <- brackets (sepBy expr (symbol ","))
+  return $ ExprWithMetadata (Tuple exprs) (ExprMetadata sp uniqueId)
 
 -- | 式
-expr :: Parser Expr
+expr :: Parser ExprWithMetadata
 expr = makeExprParser term operatorTable

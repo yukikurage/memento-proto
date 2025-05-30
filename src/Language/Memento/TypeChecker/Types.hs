@@ -9,13 +9,10 @@ module Language.Memento.TypeChecker.Types (
 
 import Data.Map (Map)
 import Data.Text (Text)
-import Language.Memento.Syntax (Effect (..), Effects, Type (..), TypeError (..))
+import Language.Memento.Syntax (Effect (..), Effects, Type (..))
 
 -- | Signature of a data constructor
-data ConstructorSignature = ConstructorSignature
-  { csArgType :: Type -- Argument types,
-  , csResultType :: Type -- Result ADT type
-  }
+newtype ConstructorSignature = ConstructorSignature Type
   deriving (Show, Eq)
 
 -- | Information about a declared Algebraic Data Type (ADT)
@@ -29,7 +26,6 @@ data AdtInfo = AdtInfo
 data OperatorSignature = OperatorSignature
   { osArgType :: Type -- Argument type of the operator
   , osRetType :: Type -- Return type of the operator
-  , osEffectName :: Text -- Name of the effect this operator belongs to
   }
   deriving (Show, Eq)
 

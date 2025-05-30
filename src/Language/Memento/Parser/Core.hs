@@ -12,18 +12,29 @@ module Language.Memento.Parser.Core (
   reservedWords,
   identifier,
   lowerIdentifier,
+  lowerIdentifierVariable,
+  lowerIdentifierArgument,
+  lowerIdentifierTypeVariable,
+  lowerIdentifierTypeArgument,
   upperIdentifier,
+  upperIdentifierVariable,
+  upperIdentifierArgument,
+  upperIdentifierTypeVariable,
+  upperIdentifierTypeArgument,
+  newUniqueId,
 ) where
 
 import Control.Monad.Combinators.Expr
+import qualified Control.Monad.State as State
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void
+import Language.Memento.Syntax (ArgumentMetadata (ArgumentMetadata), ArgumentWithMetadata (ArgumentWithMetadata), TypeArgumentMetadata (TypeArgumentMetadata), TypeArgumentWithMetadata (TypeArgumentWithMetadata), TypeVariable (TypeVariable), TypeVariableMetadata (TypeVariableMetadata), TypeVariableWithMetadata (TypeVariableWithMetadata), Variable (Variable), VariableMetadata (VariableMetadata), VariableWithMetadata (VariableWithMetadata))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void Text
+type Parser = ParsecT Void Text (State.State Int)
 
 -- | スペース消費パーサー
 sc :: Parser ()
@@ -84,6 +95,34 @@ lowerIdentifier = try $ lexeme $ do
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
 
+lowerIdentifierVariable :: Parser VariableWithMetadata
+lowerIdentifierVariable = do
+  name <- lowerIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ VariableWithMetadata (Variable name) (VariableMetadata sp uniqueId)
+
+lowerIdentifierArgument :: Parser ArgumentWithMetadata
+lowerIdentifierArgument = do
+  name <- lowerIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ ArgumentWithMetadata (Variable name) (ArgumentMetadata sp uniqueId)
+
+lowerIdentifierTypeVariable :: Parser TypeVariableWithMetadata
+lowerIdentifierTypeVariable = do
+  name <- lowerIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ TypeVariableWithMetadata (TypeVariable name) (TypeVariableMetadata sp uniqueId)
+
+lowerIdentifierTypeArgument :: Parser TypeArgumentWithMetadata
+lowerIdentifierTypeArgument = do
+  name <- lowerIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ TypeArgumentWithMetadata (TypeVariable name) (TypeArgumentMetadata sp uniqueId)
+
 -- | upperIdentifier (先頭が大文字の識別子)
 upperIdentifier :: Parser Text
 upperIdentifier = try $ lexeme $ do
@@ -93,3 +132,37 @@ upperIdentifier = try $ lexeme $ do
   if name `elem` reservedWords
     then fail $ "keyword " <> show name <> " cannot be an identifier"
     else return name
+
+upperIdentifierVariable :: Parser VariableWithMetadata
+upperIdentifierVariable = do
+  name <- upperIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ VariableWithMetadata (Variable name) (VariableMetadata sp uniqueId)
+
+upperIdentifierArgument :: Parser ArgumentWithMetadata
+upperIdentifierArgument = do
+  name <- upperIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ ArgumentWithMetadata (Variable name) (ArgumentMetadata sp uniqueId)
+
+upperIdentifierTypeVariable :: Parser TypeVariableWithMetadata
+upperIdentifierTypeVariable = do
+  name <- upperIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ TypeVariableWithMetadata (TypeVariable name) (TypeVariableMetadata sp uniqueId)
+
+upperIdentifierTypeArgument :: Parser TypeArgumentWithMetadata
+upperIdentifierTypeArgument = do
+  name <- upperIdentifier
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ TypeArgumentWithMetadata (TypeVariable name) (TypeArgumentMetadata sp uniqueId)
+
+newUniqueId :: Parser Int
+newUniqueId = do
+  id <- State.get
+  State.put (id + 1)
+  return id
