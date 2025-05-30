@@ -36,6 +36,12 @@ library
     Language.Memento.Parser.Patterns
     Language.Memento.Parser.Types
     Language.Memento.Syntax
+    Language.Memento.Syntax.BinOp
+    Language.Memento.Syntax.Definition
+    Language.Memento.Syntax.Expr
+    Language.Memento.Syntax.Kind
+    Language.Memento.Syntax.Token
+    Language.Memento.Syntax.Type
     Language.Memento.TypeChecker
     Language.Memento.TypeChecker.Expressions
     Language.Memento.TypeChecker.Handle
@@ -43,6 +49,7 @@ library
     Language.Memento.TypeChecker.Monad
     Language.Memento.TypeChecker.Patterns
     Language.Memento.TypeChecker.Registration
+    Language.Memento.TypeChecker.Solver
     Language.Memento.TypeChecker.Types
   other-modules:
     Paths_memento_proto

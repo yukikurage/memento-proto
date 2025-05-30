@@ -16,11 +16,11 @@ effect ThrowE [
 // Effects: <Trans>
 val c_func : number -> number with <Trans, ThrowE> := 
   let input_n : number 
-  -> input_n |> (do NumBool) |> let　x_nb
+  -> input_n |> NumBool |> let　x_nb
   -> if (x_nb) then (
-    true |> (do BoolNum)
+    true |> BoolNum
   ) else (
-    100 |> (do ThrowE)
+    100 |> ThrowE
   );
 
 

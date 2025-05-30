@@ -14,72 +14,106 @@ import Data.Text (Text)
 import Language.Memento.Parser.Core (
   Parser,
   brackets,
+  identifier,
+  lowerIdentifierTypeVariable,
+  newUniqueId,
   parens,
   rword,
   symbol,
   upperIdentifier,
+  upperIdentifierTypeVariable,
  )
-import Language.Memento.Syntax (Effect (..), Effects, Type (..))
+import Language.Memento.Syntax (Effect (..), EffectMetadata (EffectMetadata), EffectWithMetadata (EffectWithMetadata), Effects, EffectsMetadata (EffectsMetadata), EffectsWithMetadata (EffectsWithMetadata), Type (..), TypeMetadata (TypeMetadata), TypeWithMetadata (TypeWithMetadata))
 import Text.Megaparsec
 import Text.Megaparsec.Char
 
 -- | エフェクトのパーサー
-effectParser :: Parser Effect
-effectParser = Effect <$> upperIdentifier -- 大文字で始まる識別子
+effectParser :: Parser EffectWithMetadata
+effectParser = do
+  name <- upperIdentifierTypeVariable <|> lowerIdentifierTypeVariable -- 識別子
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  return $ EffectWithMetadata (Effect name) (EffectMetadata sp uniqueId)
 
-effectsParser :: Parser Effects
-effectsParser =
+effectsParser :: Parser EffectsWithMetadata
+effectsParser = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   symbol "<"
-    *> (Set.fromList <$> sepBy effectParser (symbol ","))
-    <* symbol ">"
-      <|> pure Set.empty -- Allows for `with` followed by nothing, implying <>
+  effects <- Set.fromList <$> sepBy effectParser (symbol ",")
+  symbol ">"
+  return $ EffectsWithMetadata effects (EffectsMetadata sp uniqueId)
 
 -- | 型の項 (非関数型、括弧で囲まれた型)
-typeTerm :: Parser Type
+typeTerm :: Parser TypeWithMetadata
 typeTerm =
   choice
     [ tupleTypeParser -- Added tupleTypeParser
     , parens typeExpr -- Recursive call to the new typeExpr
-    , TNumber <$ rword "number"
-    , TBool <$ rword "bool"
-    , TAlgebraicData <$> upperIdentifier -- 大文字で始まる識別子
+    , do
+        rword "number"
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        return $ TypeWithMetadata TNumber (TypeMetadata sp uniqueId)
+    , do
+        rword "bool"
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        return $ TypeWithMetadata TBool (TypeMetadata sp uniqueId)
+    , do
+        name <- upperIdentifierTypeVariable
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
+        return $ TypeWithMetadata (TAlgebraicData name) (TypeMetadata sp uniqueId)
     ]
 
 -- | タプル型のパーサー
-tupleTypeParser :: Parser Type
-tupleTypeParser = TTuple <$> brackets (sepBy typeExpr (symbol ","))
+tupleTypeParser :: Parser TypeWithMetadata
+tupleTypeParser = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
+  types <- brackets (sepBy typeExpr (symbol ","))
+  return $ TypeWithMetadata (TTuple types) (TypeMetadata sp uniqueId)
 
 -- | 関数型の右辺のパーサー (-> Type [with Effects])
-functionTypeSuffixParser :: Type -> Parser Type
+functionTypeSuffixParser :: TypeWithMetadata -> Parser TypeWithMetadata
 functionTypeSuffixParser argType = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   symbol "->"
   retType <- typeExpr
-  effects <- option Set.empty (rword "with" *> effectsParser)
-  return $ TFunction argType (retType, effects)
+  effects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
+  return $ TypeWithMetadata (TFunction argType (retType, effects)) (TypeMetadata sp uniqueId)
 
-handlerTypeSuffixParser :: Type -> Effects -> Parser Type
+handlerTypeSuffixParser :: TypeWithMetadata -> EffectsWithMetadata -> Parser TypeWithMetadata
 handlerTypeSuffixParser argType argEffects = do
+  uniqueId <- newUniqueId
+  sp <- getSourcePos
   symbol "=>"
   retType <- typeExpr
-  effects <- option Set.empty (rword "with" *> effectsParser)
-  return $ THandler (argType, argEffects) (retType, effects)
+  effects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
+  return $ TypeWithMetadata (THandler (argType, argEffects) (retType, effects)) (TypeMetadata sp uniqueId)
 
 -- | 型のパーサー (関数型を含む)
-typeExpr :: Parser Type
+typeExpr :: Parser TypeWithMetadata
 typeExpr =
   try
     ( do
+        uniqueId <- newUniqueId
+        sp <- getSourcePos
         argType <- typeTerm
-        argEffects <- option Set.empty (rword "with" *> effectsParser)
+        argEffects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
         handlerTypeSuffixParser argType argEffects
     )
     <|> try
       ( do
+          uniqueId <- newUniqueId
+          sp <- getSourcePos
           argType <- typeTerm
           functionTypeSuffixParser argType
       )
     <|> typeTerm
 
 -- | 型注釈のパーサー
-typeAnnotation :: Parser Type
+typeAnnotation :: Parser TypeWithMetadata
 typeAnnotation = typeExpr -- Uses the new typeExpr

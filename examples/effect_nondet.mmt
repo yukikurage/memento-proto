@@ -30,10 +30,10 @@ val handle_nondet
 
 val program : [] -> number with <NonDet>
   := let _ 
-  -> [3, 2] |> do Choose |> let x
-  -> [1, 2] |> do Choose |> let y
-  -> [1, 1] |> do Choose |> let z
-  -> if (x + y + z == 5) then (x * y * z) else ([] |> do Abort);
+  -> [3, 2] |> Choose |> let x
+  -> [1, 2] |> Choose |> let y
+  -> [1, 1] |> Choose |> let z
+  -> if (x + y + z == 5) then (x * y * z) else ([] |> Abort);
 
 val main : number -> NumList 
   := let _
