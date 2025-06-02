@@ -2,6 +2,7 @@
 
 module Language.Memento.TypeChecker.Monad where
 
+{-
 import Control.Monad (forM_, unless, when) -- Added for resolveType, unify
 import Control.Monad.Except (ExceptT, throwError) -- throwError used by moved functions
 import Control.Monad.State (State, gets, modify)
@@ -115,3 +116,5 @@ getCSConstructorInfo constructor = gets $ \st -> Map.lookup constructor (csConst
 
 getCSOperatorInfo :: Variable -> ConstraintCollectorM (Maybe OperatorInfo)
 getCSOperatorInfo operator = gets $ \st -> Map.lookup operator (csOperators st)
+
+-}

@@ -4,6 +4,8 @@
 
 module Language.Memento.TypeChecker.Patterns where
 
+{-
+
 import Control.Monad (foldM, forM, unless, when, zipWithM)
 import Control.Monad.Except (throwError)
 import qualified Data.Map as Map
@@ -76,68 +78,4 @@ collectPatternConstraintAndGetBindings (PatternWithMetadata pattern (PatternMeta
       return nestedBindings
   pure (typeVariable, bindings)
 
--- checkPatternAndGetBindings :: Pattern -> Maybe Type -> TypeCheck ([(Text, Type)], Type)
--- checkPatternAndGetBindings pattern mExpectedType = case pattern of
---   PVar name -> do
---     actualType <- case mExpectedType of
---       Just t -> return t
---       Nothing -> throwError $ CustomErrorType $ "Cannot infer type for variable pattern '" <> name <> "' without expected type or annotation."
---     return ([(name, actualType)], actualType)
---   PWildcard -> do
---     actualType <- case mExpectedType of
---       Just t -> return t
---       Nothing -> throwError $ CustomErrorType "Cannot infer type for wildcard pattern '_' without expected type."
---     return ([], actualType)
---   PNumber n -> do
---     case mExpectedType of
---       Just TNumber -> return ([], TNumber)
---       Just other -> throwError $ TypeMismatch other TNumber
---       Nothing -> return ([], TNumber) -- Default to TNumber if no expected type
---   PBool b -> do
---     case mExpectedType of
---       Just TBool -> return ([], TBool)
---       Just other -> throwError $ TypeMismatch other TBool
---       Nothing -> return ([], TBool) -- Default to TBool if no expected type
---   PConstructor consName nestedPattern -> do
---     -- Changed varName to nestedPattern
---     adtEnv <- getAdtEnv
---     -- Retrieve constructor signature (argType and resultADT)
---     -- Assuming getConstructorSignature is available or logic is inlined:
---     -- For simplicity, directly look up from tsEnv. A dedicated getConstructorSignature helper would be cleaner.
---     globalEnv <- getEnv
---     (argType, resultADT) <- case Map.lookup consName globalEnv of
---       Just (TFunction at rtTuple) -> case rtTuple of
---         (rADT, _effs) -> return (at, rADT)
---       Just other -> throwError $ CustomErrorType $ "Constructor " <> consName <> " is not a function type in env: " <> T.pack (show other)
---       Nothing -> throwError $ UnboundVariable consName
-
---     -- Validate the constructor's ADT type against the expected type for the whole PConstructor pattern
---     case mExpectedType of
---       Just expectedAdt@(TAlgebraicData expectedAdtName) ->
---         unless (resultADT == expectedAdt) $ throwError $ TypeMismatch expectedAdt resultADT
---       Just other -> throwError $ TypeMismatch other resultADT
---       Nothing -> return ()
-
---     -- Recursively check the nested pattern, expecting the constructor's argument type
---     (nestedBindings, nestedPatternType) <- checkPatternAndGetBindings nestedPattern (Just argType)
---     unify argType nestedPatternType -- Ensure the nested pattern actually matches the argument type
---     return (nestedBindings, resultADT) -- Bindings from nested, overall type is the ADT
---   PTuple ps -> do
---     case mExpectedType of
---       Just (TTuple expectedTypes) -> do
---         if length ps /= length expectedTypes
---           then throwError $ CustomErrorType $ "Tuple pattern arity mismatch. Expected " <> T.pack (show (length expectedTypes)) <> " elements, got " <> T.pack (show (length ps)) <> "."
---           else do
---             results <- zipWithM (\p t -> checkPatternAndGetBindings p (Just t)) ps expectedTypes
---             let allBindings = concatMap fst results
---             -- The actual type of the pattern is the TTuple of expectedTypes
---             return (allBindings, TTuple expectedTypes)
---       Just other -> throwError $ TypeMismatch other (TTuple []) -- Placeholder for expected tuple type
---       Nothing -> do
---         -- Infer from sub-patterns, this is complex, requires more thought for full inference
---         -- For now, if no expected type, try to infer from sub-patterns. If sub-patterns also don't have annotations, this will fail.
---         -- A simple approach: If all sub-patterns successfully infer their types, combine them.
---         inferredSubTypesAndBindings <- mapM (\p -> checkPatternAndGetBindings p Nothing) ps
---         let allBindings = concatMap fst inferredSubTypesAndBindings
---         let inferredTypes = map snd inferredSubTypesAndBindings
---         return (allBindings, TTuple inferredTypes)
+-}

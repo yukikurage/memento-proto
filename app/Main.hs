@@ -7,7 +7,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
 import Language.Memento.Parser (parseProgram)
-import Language.Memento.TypeChecker (typeCheckProgram)
+
+-- import Language.Memento.TypeChecker (typeCheckProgram)
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.FilePath (takeBaseName, takeDirectory, (</>))
@@ -22,14 +23,14 @@ main = do
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
-          case typeCheckProgram program of
-            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right typeSolverResult -> case typeSolverResult of
-              Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-              Right () -> do
-                putStrLn "Type checking successful"
-                let jsCode = generateJS program
-                TIO.writeFile outputFile jsCode
+          -- case typeCheckProgram program of
+          --   Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+          --   Right typeSolverResult -> case typeSolverResult of
+          --     Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+          --     Right () -> do
+          --       putStrLn "Type checking successful"
+          let jsCode = generateJS program
+          TIO.writeFile outputFile jsCode
     [inputFile] -> do
       let baseName = takeBaseName inputFile
           jsDir = "dist/js"
@@ -42,15 +43,15 @@ main = do
       case parseProgram input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
-          case typeCheckProgram program of
-            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-            Right typeSolverResult -> case typeSolverResult of
-              Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-              Right () -> do
-                putStrLn $ "Type checking successful"
-                let jsCode = generateJS program
-                TIO.writeFile outputFile jsCode
-                putStrLn $ "Output written to: " ++ outputFile
+          -- case typeCheckProgram program of
+          --   Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+          --   Right typeSolverResult -> case typeSolverResult of
+          --     Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+          --     Right () -> do
+          --       putStrLn $ "Type checking successful"
+          let jsCode = generateJS program
+          TIO.writeFile outputFile jsCode
+          putStrLn $ "Output written to: " ++ outputFile
     _ -> putStrLn "Usage: memento-proto <input-file.mmt> [output-file.js]"
  where
   printTypeInfo (name, typ) = do

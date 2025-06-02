@@ -1,12 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.TypeChecker.Types (
-  ConstructorSignature (..),
-  AdtInfo (..),
-  OperatorSignature (..),
-  EffectInfo (..),
-) where
+module Language.Memento.TypeChecker.Types where
 
+{-
 import Data.Map (Map)
 import Data.Text (Text)
 import Language.Memento.Syntax (Effect (..), Effects, Type (..))
@@ -35,3 +31,4 @@ data EffectInfo = EffectInfo
   , eiOps :: Map Text OperatorSignature -- Operators (op_name -> signature)
   }
   deriving (Show, Eq)
+-}

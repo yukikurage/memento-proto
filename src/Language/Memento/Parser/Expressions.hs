@@ -1,128 +1,366 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Language.Memento.Parser.Expressions (
-  expr,
-  term,
-  ifExpr,
-  lambdaExpr,
-  matchExprParser,
-  handlerExprParser,
-  operatorTable, -- Exported for use in Patterns if ever needed, though likely not.
-) where
+{-# HLINT ignore "Use <$>" #-}
 
+module Language.Memento.Parser.Expressions where
+
+import Control.Applicative (Alternative ((<|>)), optional)
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
-import Language.Memento.Parser.Core (
-  Parser,
-  brackets,
-  identifier,
-  lexeme,
-  lowerIdentifier,
-  lowerIdentifierArgument,
-  lowerIdentifierVariable,
-  newUniqueId,
-  number,
-  parens,
-  rword,
-  symbol,
-  upperIdentifier,
-  upperIdentifierArgument,
-  upperIdentifierTypeVariable,
-  upperIdentifierVariable,
- )
+import Language.Memento.Data.HCoproduct (Injective (hInject))
+import qualified Language.Memento.Parser.Class as PClass
+import Language.Memento.Syntax.BinOp (BinOp (Add, Div, Eq, Gt, Lt, Mul, Sub))
+import Language.Memento.Syntax.Expr (Expr (EApply, EBinOp, EBlock, EIf, ELambda, ELiteral, EMatch, EVar), Let (Let))
+import Language.Memento.Syntax.Tag (KBinOp, KExpr, KLet)
+import Text.Megaparsec (MonadParsec (notFollowedBy, try), choice, many, sepBy, sepEndBy)
+import Text.Megaparsec.Char (punctuationChar, symbolChar)
 
-import Language.Memento.Parser.Patterns (clauseParser, patternParser) -- clauseParser for matchExprParser
-import Language.Memento.Parser.Types (typeExpr, typeTerm)
-import Language.Memento.Syntax (BinOp (..), Expr (..), ExprMetadata (ExprMetadata), ExprWithMetadata (ExprWithMetadata), HandlerClause (..), HandlerClauseMetadata (HandlerClauseMetadata), HandlerClauseWithMetadata (HandlerClauseWithMetadata))
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import qualified Text.Megaparsec.Char.Lexer as L -- For L.symbol inside op, if still needed
+{-
 
--- Forward declaration for expr to be used in clauseParser, imported by Patterns
--- This is a common way to handle mutual recursion across modules if you split them.
--- However, given our current structure, Patterns.hs imports Expressions.hs,
--- and Expressions.hs imports Patterns.hs. This creates a circular dependency.
+Expr f KExpr -> Expr f KExpr -> Expr f KExpr もしくは
+f KExpr -> f KExpr -> f KExpr を作る？
+Expr f KExpr -> f KExpr は fix で可能 ← でもこの段階でパースが必要 (例えば Metadata を付与する場合は fix 時に SourcePos を付与する必要があるため)
 
--- To resolve:
--- 1. `matchExprParser` and `handlerExprParser` use `typeTerm` (from Types) and `clauseParser`/`handlerClauseParser` (from Patterns/self).
--- 2. `clauseParser` (in Patterns) uses `expr` (from this module).
+~~自力で書くかぁ~~ → propagateFix を使う
 
--- The simplest way is to ensure `expr` is fully defined here.
--- `clauseParser` in `Patterns.hs` will then correctly use this `expr`.
+-}
 
--- | オペランドのパーサー (op function)
-op :: Text -> Parser Text
-op n = try $ lexeme (string n <* notFollowedBy (symbolChar <|> punctuationChar))
+mkOp ::
+  forall h f m s c.
+  ( Monad m
+  , Injective BinOp h
+  , PClass.FixParser h f m
+  ) =>
+  m c ->
+  BinOp f KBinOp ->
+  m (f KBinOp)
+mkOp opTextParser expectedOp = PClass.parseFix @h $ do
+  opTextParser
+  return $ hInject expectedOp
 
-mkOperator ::
-  (ExprWithMetadata -> ExprWithMetadata -> Expr) ->
-  Parser
-    (ExprWithMetadata -> ExprWithMetadata -> ExprWithMetadata)
-mkOperator opParser = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  return $ \left right -> ExprWithMetadata (opParser left right) (ExprMetadata sp uniqueId)
+mkBinOperator ::
+  forall h f m.
+  ( Monad m
+  , Injective Expr h
+  , PClass.PropagateFix h f
+  ) =>
+  m (f KBinOp) -> -- Operator パーサ
+  m (f KExpr -> f KExpr -> f KExpr)
+mkBinOperator opParser = do
+  fixedOp <- opParser
+  return $ \x y -> PClass.propagateFix @h x y $ hInject $ EBinOp fixedOp x y
 
 -- | 演算子の優先順位テーブル
-operatorTable :: [[Operator Parser ExprWithMetadata]]
+operatorTable ::
+  forall h f m s.
+  ( Monad m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , Injective BinOp h
+  , PClass.PropagateFix h f
+  , PClass.FixParser h f m
+  ) =>
+  [[Operator m (f KExpr)]]
 operatorTable =
   [
-    [ InfixL (mkOperator (BinOp Mul) <* op "*")
-    , InfixL (mkOperator (BinOp Div) <* op "/")
+    [ InfixL (mkBinOperator @h (mkOp @h (PClass.parseSymbol "*") Mul))
+    , InfixL (mkBinOperator @h (mkOp @h (PClass.parseSymbol "/") Div))
     ]
   ,
-    [ InfixL (mkOperator (BinOp Add) <* op "+")
-    , InfixL (mkOperator (BinOp Sub) <* op "-")
+    [ InfixL (mkBinOperator @h (mkOp @h (PClass.parseSymbol "+") Add))
+    , InfixL (mkBinOperator @h (mkOp @h (PClass.parseSymbol "-") Sub))
     ]
   ,
-    [ InfixN (mkOperator (BinOp Eq) <* op "==")
-    , InfixN (mkOperator (BinOp Lt) <* op "<")
-    , InfixN (mkOperator (BinOp Gt) <* op ">")
+    [ InfixN (mkBinOperator @h (mkOp @h (PClass.parseSymbol "==") Eq))
+    , InfixN (mkBinOperator @h (mkOp @h (PClass.parseSymbol "<") Lt))
+    , InfixN (mkBinOperator @h (mkOp @h (PClass.parseSymbol ">") Gt))
     ]
-  , [InfixR (mkOperator Apply <* op "<|")]
-  , [InfixL (mkOperator (flip Apply) <* op "|>")]
-  , [InfixR (mkOperator HandleApply <* op "<<|")]
-  , [InfixL (mkOperator (flip HandleApply) <* op "|>>")]
   ]
 
 -- | if式
-ifExpr :: Parser ExprWithMetadata
-ifExpr = lexeme $ do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  rword "if"
-  cond <- term -- Changed from expr to term to avoid direct left-recursion with operatorTable
-  rword "then"
-  thenExpr <- term -- Changed from expr to term
-  rword "else"
-  elseExpr <- term -- Changed from expr to term
-  return $ ExprWithMetadata (If cond thenExpr elseExpr) (ExprMetadata sp uniqueId) -- Changed from expr to term
+parseIfExpr ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.MTypeParser f m
+  , PClass.PatternParser f m
+  , Injective Let h
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseIfExpr = PClass.parseFix @h $ do
+  PClass.parseReservedWord "if"
+  cond <- PClass.parseParens (parseExpr @h)
+  thenExpr <- parseBlock @h
+  PClass.parseReservedWord "else"
+  elseExpr <- parseBlock @h
+  return $ hInject $ EIf cond thenExpr elseExpr
 
--- | ラムダ式
-lambdaExpr :: Parser ExprWithMetadata
-lambdaExpr = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  rword "let"
-  patt <- patternParser -- Changed from lowerIdentifier to patternParser
-  mType <- optional $ do
-    void $ symbol ":"
-    typeTerm -- from Types
-  void $ symbol "->"
-  body <- expr -- Recursive call to expr
-  return $ ExprWithMetadata (Lambda patt mType body) (ExprMetadata sp uniqueId)
-
-{- | match式のパーサー
-例: branch myValue [ (Some x) -> x, (None) -> 0 ]
+{- | ラムダ式
+| (x : arg) => body
+| (Constructor(x) : arg) => body
+| (Tuple(x, y) : Tuple) => ...
 -}
-matchExprParser :: Parser ExprWithMetadata
-matchExprParser = lexeme $ do
+parseLambdaExpr ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseLambdaExpr = PClass.parseFix @h $ do
+  args <-
+    PClass.parseParens $
+      sepEndBy
+        ( do
+            patt <- PClass.parsePattern
+            PClass.parseSymbol ":"
+            typ <- PClass.parseMType
+
+            return (patt, typ)
+        )
+        (PClass.parseSymbol ",")
+  PClass.parseSymbol "=>"
+  body <- parseExpr @h
+  return $ hInject $ ELambda args body
+
+{- | match式のパーサー λ式の列のような感じ
+例: switch(arg) [ (Some(x) : argType) => x, (None : argType) => 0 ]
+-}
+parseMatchExpr ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , PClass.PropagateFix h f
+  , PClass.VariableParser f m
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KExpr)
+parseMatchExpr = PClass.parseFix @h $ do
+  PClass.parseReservedWord "switch"
+  args <- PClass.parseParens $ sepEndBy (parseExpr @h) (PClass.parseSymbol ",")
+  clauses <-
+    PClass.parseBrackets $
+      sepEndBy
+        ( do
+            args <-
+              PClass.parseParens $
+                sepEndBy
+                  ( do
+                      patt <- PClass.parsePattern
+                      PClass.parseSymbol ":"
+                      typ <- PClass.parseMType
+                      return (patt, typ)
+                  )
+                  (PClass.parseSymbol ",")
+            PClass.parseSymbol "=>"
+            body <- parseExpr @h
+            return (args, body)
+        )
+        (PClass.parseSymbol ",")
+  return $ hInject $ EMatch args clauses
+
+parseLet ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Let h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  , Injective Expr h
+  ) =>
+  m (f KLet)
+parseLet = PClass.parseFix @h $ do
+  PClass.parseReservedWord "let"
+  pat <- PClass.parsePattern
+  PClass.parseSymbol ":"
+  typ <- PClass.parseMType
+  PClass.parseSymbol "="
+  body <- parseExpr @h
+  PClass.parseSymbol ";"
+  return $ hInject $ Let pat typ body
+
+parseBlock ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , Injective Let h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseBlock = PClass.parseFix @h $ do
+  PClass.parseBraces $ do
+    lets <- many (parseLet @h)
+    body <- parseExpr @h
+    return $ hInject $ EBlock lets body
+
+parseLiteral ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KExpr)
+parseLiteral = PClass.parseFix @h $ do
+  lit <- PClass.parseLiteral
+  return $ hInject $ ELiteral lit
+
+parseVar ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseVar = PClass.parseFix @h $ do
+  var <- PClass.parseVariable
+  return $ hInject $ EVar var
+
+{- | 関数適用
+例: f(x, y) や f(x)(y) のような形式
+-}
+parseApp ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseApp = PClass.parseFix @h $ do
+  func <- parseTerm @h
+  args <- PClass.parseParens $ sepEndBy (parseExpr @h) (PClass.parseSymbol ",")
+  return $ hInject $ EApply func args
+
+{- | 項
+| 括弧が無くても独立したものとして判断できる (そうな) もの
+-}
+parseTerm ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  ) =>
+  m (f KExpr)
+parseTerm =
+  choice
+    [ parseApp @h -- Function application
+    , PClass.parseParens (parseExpr @h) -- Recursive call to expr
+    , parseBlock @h -- Block
+    , parseLiteral @h -- Literal
+    , parseVar @h -- Var
+    ]
+
+-- | バイナリ演算子とタームで構成される式
+parseTermAndBinOp ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.PropagateFix h f
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseTermAndBinOp = makeExprParser (parseTerm @h) (operatorTable @h)
+
+-- | バイナリ演算子とタームで構成される式、若しくは関数適用、switch, lambda 式
+parseExpr ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.PropagateFix h f
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , Injective BinOp h
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KExpr)
+parseExpr =
+  choice
+    [ parseIfExpr @h
+    , parseMatchExpr @h
+    , parseLambdaExpr @h
+    , parseTermAndBinOp @h
+    ]
+
+{-
+
+-- | タプル式のパーサー
+tupleExprParser :: Parser ExprWithMetadata
+tupleExprParser = do
   uniqueId <- newUniqueId
   sp <- getSourcePos
-  rword "branch"
-  clauses <- brackets (sepBy (clauseParser expr) (symbol ",")) -- Pass expr to clauseParser
-  return $ ExprWithMetadata (Match clauses) (ExprMetadata sp uniqueId)
+  exprs <- brackets (sepBy expr (symbol ","))
+  return $ ExprWithMetadata (Tuple exprs) (ExprMetadata sp uniqueId)
 
 {- | ハンドラ節のパーサー
 例:
@@ -165,41 +403,4 @@ handlerExprParser = lexeme $ do
   clauses <- brackets (sepBy handlerClauseParser (symbol ","))
   return $ ExprWithMetadata (Handle clauses) (ExprMetadata sp uniqueId)
 
--- | 項
-term :: Parser ExprWithMetadata
-term =
-  choice
-    [ lambdaExpr
-    , matchExprParser
-    , handlerExprParser
-    , ifExpr
-    , tupleExprParser -- Added tupleExprParser
-    , parens expr -- Recursive call to expr
-    , do
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        name <- upperIdentifierVariable <|> lowerIdentifierVariable
-        return $ ExprWithMetadata (Var name) (ExprMetadata sp uniqueId)
-    , do
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        number <- number
-        return $ ExprWithMetadata (Number number) (ExprMetadata sp uniqueId)
-    , do
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        bool <- True <$ rword "true" <|> False <$ rword "false"
-        return $ ExprWithMetadata (Bool bool) (ExprMetadata sp uniqueId)
-    ]
-
--- | タプル式のパーサー
-tupleExprParser :: Parser ExprWithMetadata
-tupleExprParser = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  exprs <- brackets (sepBy expr (symbol ","))
-  return $ ExprWithMetadata (Tuple exprs) (ExprMetadata sp uniqueId)
-
--- | 式
-expr :: Parser ExprWithMetadata
-expr = makeExprParser term operatorTable
+-}

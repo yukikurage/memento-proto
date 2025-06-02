@@ -6,6 +6,7 @@
 -}
 module Language.Memento.TypeChecker.Registration where
 
+{-
 import Control.Monad (foldM, forM_, unless, when)
 import Control.Monad.Except (throwError)
 import Control.Monad.State (modify) -- Added import for modify
@@ -19,7 +20,7 @@ import Language.Memento.TypeChecker.Solver
 import Language.Memento.TypeChecker.Types
 
 {- | コンストラクタを公理として追加
-| ついでにマッピングも追加する
+\| ついでにマッピングも追加する
 -}
 registerConstructor :: TypeVariable -> ConstructorDefWithMetadata -> ConstraintCollectorM ()
 registerConstructor dataTy (ConstructorDefWithMetadata (ConstructorDef (ArgumentWithMetadata var _) typ) (ConstructorDefMetadata _ uniqueId)) = do
@@ -65,3 +66,4 @@ registerDefinition (DefinitionWithMetadata def (DefinitionMetadata _ uniqueId)) 
     addTypePreference typeVariable Minimize
     addEnvSingleton var typeVariable
     pure ()
+-}

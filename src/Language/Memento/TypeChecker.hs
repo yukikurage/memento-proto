@@ -3,6 +3,7 @@
 
 -- ScopedTypeVariables might not be needed here anymore
 
+{-
 module Language.Memento.TypeChecker where
 
 import Control.Monad (foldM, forM_, unless) -- `when` might not be needed
@@ -56,3 +57,4 @@ typeCheckProgram (Program definitions) =
       (Left err, _) -> Left err
       (Right (), ConstraintCollectorState{csConstraints = constraints, csPreferences = preferences}) ->
         Right $ solve 100 constraints preferences
+-}

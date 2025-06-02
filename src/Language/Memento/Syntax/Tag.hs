@@ -1,13 +1,14 @@
 {-# LANGUAGE KindSignatures #-}
 
-module Language.Memento.Syntax.Kind where
+module Language.Memento.Syntax.Tag where
 
 import Data.Kind (Type)
 
-{- Tokens -}
+{- Literals -}
+data KLiteral :: Type
 
--- | `KToken a` represents a token of type `a`
-data KToken :: Type -> Type
+{- Variables -}
+data KVariable :: Type
 
 {- Types -}
 data KType :: Type
@@ -18,6 +19,7 @@ data KType :: Type
 data KDefinition :: Type
 
 {- Expressions -}
+data KLet :: Type
 data KExpr :: Type
 data KPattern :: Type
 data KBinOp :: Type

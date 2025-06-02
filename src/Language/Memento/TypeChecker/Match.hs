@@ -4,6 +4,8 @@
 
 module Language.Memento.TypeChecker.Match where
 
+{-
+
 import Control.Monad (foldM, unless, when, zipWithM)
 import Control.Monad.Except (throwError)
 import qualified Data.Map as Map
@@ -18,14 +20,14 @@ import Language.Memento.TypeChecker.Solver (ConstraintOperator (COEqual, COGreat
 import Language.Memento.TypeChecker.Types
 
 {- | Pattern の型制約を習得し環境に追加する。さらに変数と導入された型変数のマッピングを返す
-| 導入される型変数が Maxbound を好むか Minbound を好むかを選ぶ事ができる
-| 返り値は (パターン自身の型変数, 変数と導入された型変数のマッピング)
-| Pattern は少しややこしい。なぜなら……
-| (パターンマッチできる A と C に関して、) A -> B と C -> D という関数を用意して分岐させると、A|C -> B|D という関数を得る事ができる
-| ここでこの関数と X -> Y という関数との間に Constraint を作りたいとする (X -> Y が A|C -> B|D の部分型であることを Constraint で表現したい)
-| 引数に対して反変なので X > A|C を言いたい (それと Y < B|D)
-| しかしながら、 X > A, かつ X > C は X > A & C になってしまう
-| 型ユニオンがない今回の体系では、 X > A|C を表現できない
+\| 導入される型変数が Maxbound を好むか Minbound を好むかを選ぶ事ができる
+\| 返り値は (パターン自身の型変数, 変数と導入された型変数のマッピング)
+\| Pattern は少しややこしい。なぜなら……
+\| (パターンマッチできる A と C に関して、) A -> B と C -> D という関数を用意して分岐させると、A|C -> B|D という関数を得る事ができる
+\| ここでこの関数と X -> Y という関数との間に Constraint を作りたいとする (X -> Y が A|C -> B|D の部分型であることを Constraint で表現したい)
+\| 引数に対して反変なので X > A|C を言いたい (それと Y < B|D)
+\| しかしながら、 X > A, かつ X > C は X > A & C になってしまう
+\| 型ユニオンがない今回の体系では、 X > A|C を表現できない
 -}
 collectMatchConstraint ::
   (ExprWithMetadata -> ConstraintCollectorM (UnsolvedTypeVariable, UnsolvedEffectsVariable)) -> -- ボディの型制約を取得する関数
@@ -87,3 +89,5 @@ collectMatchConstraint collectBodyConstraint clauses (ExprMetadata _ uniqueId) t
   mapM_ addCSTypeConstraints constraintsArg
   mapM_ addCSTypeConstraints constraintsRet
   mapM_ addCSEffectConstraints constraintsEffect
+
+-}

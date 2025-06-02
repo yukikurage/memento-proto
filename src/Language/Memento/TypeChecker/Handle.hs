@@ -4,6 +4,7 @@
 
 module Language.Memento.TypeChecker.Handle where
 
+{-
 import Control.Monad (foldM, unless, when)
 import Control.Monad.Except (throwError)
 import qualified Data.List as List (partition)
@@ -87,7 +88,7 @@ collectHandleConstraint collectBodyConstraint clauses (ExprMetadata _ uniqueId) 
   addTypePreference typeVariableOfArg Maximize -- Arg はなるべく大きくなるように取りたい (反変なのでそちらの方が都合が良い)
   addTypePreference typeVariableOfRet Minimize -- Ret はなるべく小さくなるように取りたい
   addEffectPreference typeVariableOfEffect Minimize -- Effect はなるべく小さくなるように取りたい
-  {-
+
   let
     -- Match 全体をこれに一致させる (split 的な感じ)
     constraintFunc =

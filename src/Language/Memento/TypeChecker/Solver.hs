@@ -16,6 +16,7 @@ solve : Bounds -> Substitutions
 -}
 module Language.Memento.TypeChecker.Solver where
 
+{-
 import Control.Monad (foldM, forM_, unless, void, zipWithM)
 import Control.Monad.Error.Class (MonadError (..))
 import Control.Monad.Except (ExceptT, runExceptT)
@@ -651,3 +652,5 @@ solve maxItr constraints prefs = do
         )
         $ Map.filterWithKey (\k _ -> k `notElem` map fst preferEs) eBounds
     go (n - 1) (Bounds newTBounds newEBounds)
+
+-}

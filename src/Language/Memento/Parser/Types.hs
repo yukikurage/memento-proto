@@ -1,119 +1,171 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
-module Language.Memento.Parser.Types (
-  effectsParser,
-  typeTerm,
-  functionTypeSuffixParser,
-  handlerTypeSuffixParser,
-  typeExpr,
-  typeAnnotation,
-) where
+module Language.Memento.Parser.Types where
 
-import qualified Data.Set as Set
+import Control.Applicative ((<|>))
 import Data.Text (Text)
-import Language.Memento.Parser.Core (
-  Parser,
-  brackets,
-  identifier,
-  lowerIdentifierTypeVariable,
-  newUniqueId,
-  parens,
-  rword,
-  symbol,
-  upperIdentifier,
-  upperIdentifierTypeVariable,
- )
-import Language.Memento.Syntax (Effect (..), EffectMetadata (EffectMetadata), EffectWithMetadata (EffectWithMetadata), Effects, EffectsMetadata (EffectsMetadata), EffectsWithMetadata (EffectsWithMetadata), Type (..), TypeMetadata (TypeMetadata), TypeWithMetadata (TypeWithMetadata))
-import Text.Megaparsec
-import Text.Megaparsec.Char
+import Language.Memento.Data.HCoproduct (Injective (hInject))
+import qualified Language.Memento.Parser.Class as PClass
+import Language.Memento.Syntax.MType (MType (TBool, TData, TFunction, TInt, TIntersection, TLiteral, TNever, TNumber, TString, TUnion, TUnknown, TVar))
+import Language.Memento.Syntax.Tag (KType)
+import Text.Megaparsec (MonadParsec (try), choice, sepBy)
 
--- | エフェクトのパーサー
-effectParser :: Parser EffectWithMetadata
-effectParser = do
-  name <- upperIdentifierTypeVariable <|> lowerIdentifierTypeVariable -- 識別子
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  return $ EffectWithMetadata (Effect name) (EffectMetadata sp uniqueId)
-
-effectsParser :: Parser EffectsWithMetadata
-effectsParser = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  symbol "<"
-  effects <- Set.fromList <$> sepBy effectParser (symbol ",")
-  symbol ">"
-  return $ EffectsWithMetadata effects (EffectsMetadata sp uniqueId)
-
--- | 型の項 (非関数型、括弧で囲まれた型)
-typeTerm :: Parser TypeWithMetadata
-typeTerm =
+-- | Parse a type
+parseMType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseMType =
   choice
-    [ tupleTypeParser -- Added tupleTypeParser
-    , parens typeExpr -- Recursive call to the new typeExpr
-    , do
-        rword "number"
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        return $ TypeWithMetadata TNumber (TypeMetadata sp uniqueId)
-    , do
-        rword "bool"
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        return $ TypeWithMetadata TBool (TypeMetadata sp uniqueId)
-    , do
-        name <- upperIdentifierTypeVariable
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        return $ TypeWithMetadata (TAlgebraicData name) (TypeMetadata sp uniqueId)
+    [ parseVarType @h
+    , parsePrimitiveType @h
+    , parseFunctionType @h
+    , parseDataType @h
+    , parseLiteralType @h
+    , parseUnionType @h
+    , parseIntersectionType @h
+    , parseUnknownType @h
+    , parseNeverType @h
     ]
 
--- | タプル型のパーサー
-tupleTypeParser :: Parser TypeWithMetadata
-tupleTypeParser = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  types <- brackets (sepBy typeExpr (symbol ","))
-  return $ TypeWithMetadata (TTuple types) (TypeMetadata sp uniqueId)
+-- | Parse a variable type
+parseVarType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KType)
+parseVarType = PClass.parseFix @h $ do
+  var <- PClass.parseVariable
+  return $ hInject $ TVar var
 
--- | 関数型の右辺のパーサー (-> Type [with Effects])
-functionTypeSuffixParser :: TypeWithMetadata -> Parser TypeWithMetadata
-functionTypeSuffixParser argType = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  symbol "->"
-  retType <- typeExpr
-  effects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
-  return $ TypeWithMetadata (TFunction argType (retType, effects)) (TypeMetadata sp uniqueId)
+-- | Parse a primitive type
+parsePrimitiveType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  ) =>
+  m (f KType)
+parsePrimitiveType =
+  PClass.parseFix @h $
+    choice
+      [ PClass.parseReservedWord "number" >> return (hInject TNumber)
+      , PClass.parseReservedWord "int" >> return (hInject TInt)
+      , PClass.parseReservedWord "bool" >> return (hInject TBool)
+      , PClass.parseReservedWord "string" >> return (hInject TString)
+      ]
 
-handlerTypeSuffixParser :: TypeWithMetadata -> EffectsWithMetadata -> Parser TypeWithMetadata
-handlerTypeSuffixParser argType argEffects = do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  symbol "=>"
-  retType <- typeExpr
-  effects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
-  return $ TypeWithMetadata (THandler (argType, argEffects) (retType, effects)) (TypeMetadata sp uniqueId)
+-- | Parse a function type
+parseFunctionType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseFunctionType = PClass.parseFix @h $ do
+  args <- PClass.parseParens $ sepBy (parseMType @h) (PClass.parseSymbol ",")
+  PClass.parseSymbol "=>"
+  ret <- parseMType @h
+  return $ hInject $ TFunction args ret
 
--- | 型のパーサー (関数型を含む)
-typeExpr :: Parser TypeWithMetadata
-typeExpr =
-  try
-    ( do
-        uniqueId <- newUniqueId
-        sp <- getSourcePos
-        argType <- typeTerm
-        argEffects <- option (EffectsWithMetadata Set.empty (EffectsMetadata sp uniqueId)) (rword "with" *> effectsParser)
-        handlerTypeSuffixParser argType argEffects
-    )
-    <|> try
-      ( do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          argType <- typeTerm
-          functionTypeSuffixParser argType
-      )
-    <|> typeTerm
+-- | Parse a data type
+parseDataType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KType)
+parseDataType = PClass.parseFix @h $ do
+  name <- PClass.parseVariable
+  return $ hInject $ TData name
 
--- | 型注釈のパーサー
-typeAnnotation :: Parser TypeWithMetadata
-typeAnnotation = typeExpr -- Uses the new typeExpr
+-- | Parse a literal type
+parseLiteralType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseLiteralType = PClass.parseFix @h $ do
+  lit <- PClass.parseLiteral
+  return $ hInject $ TLiteral lit
+
+-- | Parse a union type
+parseUnionType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseUnionType = PClass.parseFix @h $ do
+  types <- PClass.parseBrackets $ sepBy (parseMType @h) (PClass.parseSymbol "|")
+  return $ hInject $ TUnion types
+
+-- | Parse an intersection type
+parseIntersectionType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseIntersectionType = PClass.parseFix @h $ do
+  types <- PClass.parseBrackets $ sepBy (parseMType @h) (PClass.parseSymbol "&")
+  return $ hInject $ TIntersection types
+
+-- | Parse an unknown type
+parseUnknownType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  ) =>
+  m (f KType)
+parseUnknownType = PClass.parseFix @h $ do
+  PClass.parseReservedWord "unknown"
+  return $ hInject TUnknown
+
+-- | Parse a never type
+parseNeverType ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  ) =>
+  m (f KType)
+parseNeverType = PClass.parseFix @h $ do
+  PClass.parseReservedWord "never"
+  return $ hInject TNever

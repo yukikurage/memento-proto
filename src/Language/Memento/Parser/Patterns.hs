@@ -1,87 +1,90 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
-module Language.Memento.Parser.Patterns (
-  patternParser,
-  clauseParser,
-) where
+module Language.Memento.Parser.Patterns where
 
-import Language.Memento.Parser.Core (
-  Parser,
-  brackets,
-  lexeme,
-  lowerIdentifier,
-  newUniqueId,
-  number,
-  parens,
-  rword,
-  symbol,
-  upperIdentifier,
-  upperIdentifierArgument,
-  upperIdentifierVariable,
- )
-import Language.Memento.Syntax (ArgumentMetadata (ArgumentMetadata), ArgumentWithMetadata (ArgumentWithMetadata), Clause (..), ClauseMetadata (ClauseMetadata), ClauseWithMetadata (ClauseWithMetadata), Expr, ExprWithMetadata, Pattern (..), PatternMetadata (PatternMetadata), PatternWithMetadata (PatternWithMetadata), Variable (Variable))
-import Text.Megaparsec
-import Text.Megaparsec.Char
+import Control.Applicative ((<|>))
+import Data.Text (Text)
+import Language.Memento.Data.HCoproduct (Injective (hInject))
+import qualified Language.Memento.Parser.Class as PClass
+import Language.Memento.Syntax.Pattern (Pattern (PCons, PLiteral, PVar, PWildcard))
+import Language.Memento.Syntax.Tag (KPattern)
+import Text.Megaparsec (MonadParsec (try), choice, sepBy)
 
--- | パターンパーサー
-patternParser :: Parser PatternWithMetadata
-patternParser =
-  lexeme $
-    choice
-      [ do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          nm <- number
-          return $ PatternWithMetadata (PNumber nm) (PatternMetadata sp uniqueId) -- 数値パターン
-      , do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          symbol "true"
-          return $ PatternWithMetadata (PBool True) (PatternMetadata sp uniqueId) -- trueパターン
-      , do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          symbol "false"
-          return $ PatternWithMetadata (PBool False) (PatternMetadata sp uniqueId)
-      , -- タプルパターン: [p1, p2, ...]
-        do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          patterns <- brackets (patternParser `sepBy` symbol ",")
-          return $ PatternWithMetadata (PTuple patterns) (PatternMetadata sp uniqueId)
-      , -- コンストラクタパターン: ConstructorName varName
-        try $ do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          constructorName <- upperIdentifierVariable -- 大文字で始まる識別子
-          -- Changed to parse a nested pattern instead of just a variable name
-          pat <- patternParser -- 小文字で始まる識別子または他のパターン
-          return $ PatternWithMetadata (PConstructor constructorName pat) (PatternMetadata sp uniqueId)
-      , -- ワイルドカードパターン: _
-        do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          symbol "_"
-          return $ PatternWithMetadata PWildcard (PatternMetadata sp uniqueId)
-      , -- 変数パターン: varName (must come after wildcard and constructor to avoid ambiguity)
-        do
-          uniqueId <- newUniqueId
-          sp <- getSourcePos
-          varName <- lowerIdentifier
-          return $ PatternWithMetadata (PVar (ArgumentWithMetadata (Variable varName) (ArgumentMetadata sp uniqueId))) (PatternMetadata sp uniqueId)
-      , do
-          parens patternParser
-      ]
+-- | Parse a pattern
+parsePattern ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Pattern h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KPattern)
+parsePattern =
+  choice
+    [ parseVarPattern @h
+    , parseWildcardPattern @h
+    , parseLiteralPattern @h
+    , parseConsPattern @h
+    ]
 
-{- | match節のパーサー
-例: (Cons x xs) -> x
--}
-clauseParser :: Parser ExprWithMetadata -> Parser ClauseWithMetadata
-clauseParser exprParser = lexeme $ do
-  uniqueId <- newUniqueId
-  sp <- getSourcePos
-  rword "let"
-  pat <- patternParser -- Pattern enclosed in parentheses
-  symbol "->"
-  ex <- exprParser -- Use the passed parser
-  return $ ClauseWithMetadata (Clause pat ex) (ClauseMetadata sp uniqueId)
+-- | Parse a variable pattern
+parseVarPattern ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Pattern h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  ) =>
+  m (f KPattern)
+parseVarPattern = PClass.parseFix @h $ do
+  var <- PClass.parseVariable
+  return $ hInject $ PVar var
+
+-- | Parse a wildcard pattern
+parseWildcardPattern ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Pattern h
+  , PClass.FixParser h f m
+  ) =>
+  m (f KPattern)
+parseWildcardPattern = PClass.parseFix @h $ do
+  PClass.parseSymbol "_"
+  return $ hInject PWildcard
+
+-- | Parse a literal pattern
+parseLiteralPattern ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Pattern h
+  , PClass.FixParser h f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KPattern)
+parseLiteralPattern = PClass.parseFix @h $ do
+  lit <- PClass.parseLiteral
+  return $ hInject $ PLiteral lit
+
+-- | Parse a constructor pattern
+parseConsPattern ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Pattern h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KPattern)
+parseConsPattern = PClass.parseFix @h $ do
+  constructor <- PClass.parseVariable
+  args <- PClass.parseParens $ sepBy (parsePattern @h) (PClass.parseSymbol ",")
+  return $ hInject $ PCons constructor args
