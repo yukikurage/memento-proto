@@ -40,7 +40,7 @@ isValDef astD =
   case unHFix astD of
     _meta :*: stx ->
       case unDefinition stx of
-        ValDef _ _ _ -> True
+        ValDef _ _ _ _ -> True
         _ -> False
 
 -------------------------------------------------------------------------------
@@ -60,14 +60,14 @@ generateDefinition astD =
     _meta :*: stx ->
       case unDefinition stx of
         -- Value definition
-        ValDef var typ expr ->
+        ValDef var _params typ expr ->  -- Ignore type parameters for now
           let bindings = genValDefinition var typ expr -- [(name, expr)]
            in T.unlines $ map (uncurry genConstDefRaw) bindings
         -- Data definition (emit its constructor wrappers)
-        DataDef var typ ->
+        DataDef var _params typ ->  -- Ignore type parameters for now
           let bindings = genDataDefinition var typ -- [(name, expr)]
            in T.unlines $ map (uncurry genConstDefRaw) bindings
-        TypeDef var typ -> ""
+        TypeDef var _params typ -> ""  -- Ignore type parameters for now
 
 -------------------------------------------------------------------------------
 
@@ -87,7 +87,7 @@ generateConstructorWrapperFunctions defs =
             case unHFix astD of
               _meta :*: stx ->
                 case unDefinition stx of
-                  DataDef var typ -> genDataDefinition var typ
+                  DataDef var _params typ -> genDataDefinition var typ  -- Ignore type parameters for now
                   _ -> []
         )
         defs

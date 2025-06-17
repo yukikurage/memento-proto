@@ -13,8 +13,24 @@ import Language.Memento.Data.HCoproduct (Injective (hInject))
 import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax.Definition (Definition (..))
 import Language.Memento.Syntax.MType (MType (TFunction, TVar))
-import Language.Memento.Syntax.Tag (KDefinition)
-import Text.Megaparsec (MonadParsec, choice, (<?>))
+import Language.Memento.Syntax.Tag (KDefinition, KVariable)
+import Text.Megaparsec (MonadParsec, choice, sepBy, (<?>))
+
+-- | Parse optional type parameter list like <T, U, V>
+parseTypeParameters ::
+  forall f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , PClass.VariableParser f m
+  ) =>
+  m [f KVariable]
+parseTypeParameters = do
+  ( do
+      PClass.parseSymbol "<"
+      params <- sepBy PClass.parseVariable (PClass.parseSymbol ",")
+      PClass.parseSymbol ">"
+      return params
+    ) <|> return []  -- Empty list if no type parameters
 
 parseDataDefinition ::
   forall h f m s.
@@ -28,11 +44,12 @@ parseDataDefinition ::
   m (f KDefinition)
 parseDataDefinition = PClass.parseFix @h $ do
   name <- PClass.parseVariable
+  typeParams <- parseTypeParameters
   PClass.parseSymbol ":"
   typ <- PClass.parseMType
   -- optional trailing ';'
   _ <- PClass.parseSymbol ";" <|> pure ""
-  return $ hInject $ DataDef name typ
+  return $ hInject $ DataDef name typeParams typ
 
 parseValDefinition ::
   forall h f m s.
@@ -47,12 +64,13 @@ parseValDefinition ::
   m (f KDefinition)
 parseValDefinition = PClass.parseFix @h $ do
   name <- PClass.parseVariable
+  typeParams <- parseTypeParameters
   PClass.parseSymbol ":"
   typ <- PClass.parseMType
   PClass.parseSymbol ":="
   body <- PClass.parseExpr
   _ <- PClass.parseSymbol ";"
-  return $ hInject $ ValDef name typ body
+  return $ hInject $ ValDef name typeParams typ body
 
 parseTypeDef ::
   forall h f m s.
@@ -66,10 +84,11 @@ parseTypeDef ::
   m (f KDefinition)
 parseTypeDef = PClass.parseFix @h $ do
   name <- PClass.parseVariable
+  typeParams <- parseTypeParameters
   PClass.parseSymbol ":="
   typ <- PClass.parseMType
   _ <- PClass.parseSymbol ";"
-  return $ hInject $ TypeDef name typ
+  return $ hInject $ TypeDef name typeParams typ
 
 parseDefinition ::
   forall h f m s.

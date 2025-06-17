@@ -1,0 +1,16 @@
+// Simpler type inference test
+val identity<T> : (x : T) => T := (x : T) => x;
+
+// Test polymorphic data with inference
+data List<T> : (head : T, tail : List) => List;
+data Nil<T> : () => List;
+
+val singleton<T> : (x : T) => List := (x : T) => List(x, Nil());
+
+// Type inference should work here
+val int_list : List := singleton(42);
+val string_list : List := singleton("hello");
+
+// Basic function composition without complex types
+val add_one : (x : number) => number := (x : number) => x + 1;
+val result : number := add_one(identity(41));

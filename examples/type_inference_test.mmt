@@ -1,0 +1,17 @@
+// Test type inference limits
+val identity<T> : (x : T) => T := (x : T) => x;
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C := 
+  (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
+
+// Can type inference handle complex compositions?
+val add_one : (x : number) => number := (x : number) => x + 1;
+val double : (x : number) => number := (x : number) => x * 2;
+val add_one_then_double : (x : number) => number := compose(double, add_one);
+
+// Test with polymorphic data
+data List<T> : (head : T, tail : List) => List;
+data Nil<T> : () => List;
+
+val singleton<T> : (x : T) => List := (x : T) => List(x, Nil());
+val int_list : List := singleton(42);
+val string_list : List := singleton("hello");

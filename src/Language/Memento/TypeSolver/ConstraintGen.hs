@@ -10,8 +10,10 @@ import Control.Monad.State
 import Control.Monad (unless, when, zipWithM)
 import Data.List (unzip3)
 import GHC.Base (List)
+import Text.Megaparsec (SourcePos)
 import Language.Memento.Syntax
 import Language.Memento.Syntax.Expr (Expr(..), Let(..))
+import Language.Memento.Syntax.Metadata (Metadata(..))
 import qualified Language.Memento.Syntax.MType as SMType
 import qualified Language.Memento.Syntax.Literal as SLiteral
 import qualified Language.Memento.Syntax.Variable as SVariable
@@ -29,7 +31,7 @@ import Language.Memento.TypeSolver.Solver
 data InferContext = InferContext
   { icVarCounter :: Int
   , icConstraints :: ConstraintSet
-  , icTypeEnv :: Map.Map T.Text Type
+  , icTypeEnv :: Map.Map T.Text TypeScheme  -- Store type schemes for polymorphism
   , icConstructors :: Set.Set T.Text  -- Track known constructor names
   } deriving (Show)
 
@@ -49,17 +51,31 @@ addConstraint c = do
   ctx <- get
   put ctx { icConstraints = Set.insert c (icConstraints ctx) }
 
--- Look up variable type
+-- Look up variable type and instantiate if polymorphic
 lookupVar :: T.Text -> InferM (Maybe Type)
 lookupVar name = do
   ctx <- get
-  return $ Map.lookup name (icTypeEnv ctx)
+  case Map.lookup name (icTypeEnv ctx) of
+    Nothing -> return Nothing
+    Just scheme -> do
+      -- Get fresh type variables for instantiation
+      let quantifiedVars = case scheme of
+            TypeScheme vars _ -> vars
+      freshVars <- mapM (const freshVar) quantifiedVars
+      let instantiatedType = instantiate scheme freshVars
+      return $ Just instantiatedType
 
--- Add variable to environment
+-- Add variable to environment with monomorphic type
 addVar :: T.Text -> Type -> InferM ()
 addVar name typ = do
+  let scheme = TypeScheme [] typ  -- Monomorphic type scheme
+  addVarScheme name scheme
+
+-- Add variable to environment with type scheme
+addVarScheme :: T.Text -> TypeScheme -> InferM ()
+addVarScheme name scheme = do
   ctx <- get
-  put ctx { icTypeEnv = Map.insert name typ (icTypeEnv ctx) }
+  put ctx { icTypeEnv = Map.insert name scheme (icTypeEnv ctx) }
 
 -- Add constructor to registry
 addConstructor :: T.Text -> InferM ()
@@ -74,13 +90,13 @@ isConstructor name = do
   return $ Set.member name (icConstructors ctx)
 
 -- Save current type environment
-saveTypeEnv :: InferM (Map.Map T.Text Type)
+saveTypeEnv :: InferM (Map.Map T.Text TypeScheme)
 saveTypeEnv = do
   ctx <- get
   return $ icTypeEnv ctx
 
 -- Restore type environment
-restoreTypeEnv :: Map.Map T.Text Type -> InferM ()
+restoreTypeEnv :: Map.Map T.Text TypeScheme -> InferM ()
 restoreTypeEnv env = do
   ctx <- get
   put ctx { icTypeEnv = env }
@@ -95,6 +111,22 @@ extractSyntax :: AST a -> Syntax AST a
 extractSyntax ast =
   case unHFix ast of
     (metadata :*: syntax) -> syntax
+
+-- Extract position information from AST metadata
+extractPosition :: AST a -> (SourcePos, SourcePos)
+extractPosition ast =
+  case unHFix ast of
+    (Metadata start end :*: _) -> (start, end)
+
+-- Format position for error messages
+formatPosition :: (SourcePos, SourcePos) -> String
+formatPosition (start, end) = show start ++ " to " ++ show end
+
+-- Enhanced error reporting with position information
+errorWithPosition :: AST a -> String -> InferM b
+errorWithPosition ast message = do
+  let (start, end) = extractPosition ast
+  error $ message ++ " at " ++ formatPosition (start, end)
 
 -- Convert Memento MType to solver Type (with constructor awareness)
 convertMType :: AST KType -> InferM Type
@@ -127,6 +159,11 @@ convertMType ast =
     SMType.TIntersection types -> do
       convertedTypes <- mapM convertMType types
       return $ mkIntersection convertedTypes
+    SMType.TApplication baseAst argAsts -> do
+      -- Handle type applications like List<T>, Map<K,V>
+      baseType <- convertMType baseAst
+      argTypes <- mapM convertMType argAsts
+      return $ TApplication baseType argTypes
 
 -- Convert literal to solver type
 convertLiteral :: AST KLiteral -> Type
@@ -146,7 +183,7 @@ inferExpr ast =
       maybeType <- lookupVar name
       case maybeType of
         Just t -> return t
-        Nothing -> error $ "Unbound variable: " ++ show name
+        Nothing -> errorWithPosition varAst $ "Unbound variable: " ++ T.unpack name
 
     ELiteral litAst -> return $ convertLiteral litAst
 
@@ -161,7 +198,7 @@ inferExpr ast =
           SPattern.PWildcard -> do
             -- Wildcard pattern, no binding needed
             return paramType
-          _ -> error "Complex patterns not yet supported in lambda"
+          _ -> errorWithPosition (fst (head params)) "Complex patterns not yet supported in lambda"
         ) params
       bodyType <- inferExpr bodyAst
       return $ foldr TFunction bodyType paramTypes
@@ -232,7 +269,7 @@ inferExpr ast =
               SPattern.PWildcard -> do
                 -- Wildcard pattern, no binding needed
                 return ()
-              _ -> error "Complex patterns not yet supported in let"
+              _ -> errorWithPosition patAst "Complex patterns not yet supported in let"
         ) letAsts
       inferExpr exprAst
 
@@ -263,47 +300,114 @@ inferValueDecl name typeAst exprAst = do
   addVar name declaredType
   return declaredType
 
+-- Infer type for polymorphic value declarations
+inferPolyValueDecl :: T.Text -> [AST KVariable] -> AST KType -> AST KExpr -> InferM ()
+inferPolyValueDecl name typeParams typeAst exprAst = do
+  -- Convert type parameter names to generic types
+  let paramNames = [case unVariable (extractSyntax paramAst) of 
+                     SVariable.Var paramName -> paramName | paramAst <- typeParams]
+  
+  -- Substitute type parameters with generic types in the declared type
+  declaredType <- convertMType typeAst
+  let genericType = foldr (\paramName acc -> 
+        substituteTypeVar (TypeVar paramName) (TGeneric paramName) acc) declaredType paramNames
+  
+  -- Infer the expression type in an environment with type parameters as generics
+  mapM_ (\paramName -> addVar paramName (TGeneric paramName)) paramNames
+  inferredType <- inferExpr exprAst
+  addConstraint $ Subtype inferredType genericType
+  
+  -- Generalize the type and add to environment
+  let typeScheme = generalize genericType
+  addVarScheme name typeScheme
+
+-- Helper to substitute type variables with other types
+substituteTypeVar :: TypeVar -> Type -> Type -> Type
+substituteTypeVar target replacement = applySubst (Map.singleton target replacement)
+
+-- Infer type for polymorphic data declarations
+inferPolyDataDecl :: T.Text -> [AST KVariable] -> AST KType -> InferM ()
+inferPolyDataDecl constructorName typeParams typeAst = do
+  -- Convert type parameter names to generic types
+  let paramNames = [case unVariable (extractSyntax paramAst) of 
+                     SVariable.Var paramName -> paramName | paramAst <- typeParams]
+  
+  -- Substitute type parameters with generic types in the declared type
+  constructorType <- convertMType typeAst
+  let genericType = foldr (\paramName acc -> 
+        substituteTypeVar (TypeVar paramName) (TGeneric paramName) acc) constructorType paramNames
+  
+  -- Register as constructor
+  addConstructor constructorName
+  
+  -- Generalize the constructor type and add to environment
+  let typeScheme = generalize genericType
+  addVarScheme constructorName typeScheme
+  
+  -- Register return types as ground types if needed
+  case genericType of
+    TFunction _ (TVar (TypeVar returnTypeName)) -> do
+      let groundReturnType = TConstructor returnTypeName
+      addVar ("TYPE_" <> returnTypeName) groundReturnType
+    TFunction _ (TConstructor returnTypeName) -> do
+      let groundReturnType = TConstructor returnTypeName
+      addVar ("TYPE_" <> returnTypeName) groundReturnType
+    TVar (TypeVar typeName) -> do
+      let groundType = TConstructor typeName  
+      addVar ("TYPE_" <> typeName) groundType
+    TConstructor typeName -> do
+      let groundType = TConstructor typeName  
+      addVar ("TYPE_" <> typeName) groundType
+    _ -> return ()
+
 -- Process a single declaration
 inferDecl :: AST KDefinition -> InferM ()
 inferDecl ast =
   case unDefinition (extractSyntax ast) of
-    SDefinition.ValDef varAst typeAst exprAst -> do
+    SDefinition.ValDef varAst typeParams typeAst exprAst -> do
       let SVariable.Var name = unVariable (extractSyntax varAst)
-      _ <- inferValueDecl name typeAst exprAst
-      return ()
-    SDefinition.DataDef constructorAst typeAst -> do
-      -- Process data constructor definition
+      if null typeParams
+        then do
+          -- Monomorphic definition
+          _ <- inferValueDecl name typeAst exprAst
+          return ()
+        else do
+          -- Polymorphic definition
+          inferPolyValueDecl name typeParams typeAst exprAst
+    SDefinition.DataDef constructorAst typeParams typeAst -> do
       let SVariable.Var constructorName = unVariable (extractSyntax constructorAst)
-      -- Don't register as constructor yet - process type first
-      constructorType <- convertMType typeAst
-      addConstructor constructorName  -- Register as constructor after type processing
-      addVar constructorName constructorType
-      
-      -- Register return types as ground types
-      case constructorType of
-        TFunction _ (TVar (TypeVar returnTypeName)) -> do
-          let groundReturnType = TConstructor returnTypeName
-          let groundConstructorType = TFunction (getFunctionArg constructorType) groundReturnType
-          addVar constructorName groundConstructorType
-          addVar ("TYPE_" <> returnTypeName) groundReturnType
-        TFunction _ (TConstructor returnTypeName) -> do
-          -- Handle case where return type was already converted to TConstructor
-          let groundReturnType = TConstructor returnTypeName
-          let groundConstructorType = TFunction (getFunctionArg constructorType) groundReturnType
-          addVar constructorName groundConstructorType
-          addVar ("TYPE_" <> returnTypeName) groundReturnType
-        TVar (TypeVar typeName) -> do
-          let groundType = TConstructor typeName  
-          addVar constructorName groundType
-          addVar ("TYPE_" <> typeName) groundType
-        TConstructor typeName -> do
-          -- Handle case where type was already converted to TConstructor
-          let groundType = TConstructor typeName  
-          addVar constructorName groundType
-          addVar ("TYPE_" <> typeName) groundType
-        _ -> return ()
-      return ()
-    SDefinition.TypeDef aliasAst typeAst -> do
+      if null typeParams
+        then do
+          -- Monomorphic data definition
+          constructorType <- convertMType typeAst
+          addConstructor constructorName
+          addVar constructorName constructorType
+          
+          -- Register return types as ground types
+          case constructorType of
+            TFunction _ (TVar (TypeVar returnTypeName)) -> do
+              let groundReturnType = TConstructor returnTypeName
+              let groundConstructorType = TFunction (getFunctionArg constructorType) groundReturnType
+              addVar constructorName groundConstructorType
+              addVar ("TYPE_" <> returnTypeName) groundReturnType
+            TFunction _ (TConstructor returnTypeName) -> do
+              let groundReturnType = TConstructor returnTypeName
+              let groundConstructorType = TFunction (getFunctionArg constructorType) groundReturnType
+              addVar constructorName groundConstructorType
+              addVar ("TYPE_" <> returnTypeName) groundReturnType
+            TVar (TypeVar typeName) -> do
+              let groundType = TConstructor typeName  
+              addVar constructorName groundType
+              addVar ("TYPE_" <> typeName) groundType
+            TConstructor typeName -> do
+              let groundType = TConstructor typeName  
+              addVar constructorName groundType
+              addVar ("TYPE_" <> typeName) groundType
+            _ -> return ()
+        else do
+          -- Polymorphic data definition
+          inferPolyDataDecl constructorName typeParams typeAst
+    SDefinition.TypeDef aliasAst _params typeAst -> do  -- Ignore type parameters for now
       -- Process type alias definition  
       let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
       aliasType <- convertMType typeAst
@@ -317,17 +421,22 @@ inferProgramM ast =
     SProgram.Program declAsts -> mapM_ inferDecl declAsts
 
 -- Main inference function
-inferProgram :: AST KProgram -> Either String (Map.Map T.Text Type)
+inferProgram :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
 inferProgram ast =
   let initialCtx = InferContext 0 Set.empty Map.empty Set.empty
       ((), finalCtx) = runState (inferProgramM ast) initialCtx
       constraints = icConstraints finalCtx
   in case solveConstraints constraints of
     Success subst ->
-      let finalEnv = Map.map (applySubst subst) (icTypeEnv finalCtx)
+      let finalEnv = Map.map (applySubstScheme subst) (icTypeEnv finalCtx)
       in Right finalEnv
     Contradiction -> Left "Type error: contradictory constraints"
     Ambiguous _ -> Left "Type error: ambiguous types"
+
+-- Apply substitution to a type scheme
+applySubstScheme :: Substitution -> TypeScheme -> TypeScheme
+applySubstScheme subst (TypeScheme quantified typ) = 
+  TypeScheme quantified (applySubst subst typ)
 
 -- Pattern bounds: max-bound (desired) and min-bound (actual coverage)
 data PatternBounds = PatternBounds
@@ -409,8 +518,9 @@ astToPatternTree patAst expectedType = do
           
           -- Ensure we have the right number of arguments
           when (length argPatterns /= length argTypes) $
-            error $ "Constructor " ++ T.unpack constructorName ++ " expects " ++ 
-                   show (length argTypes) ++ " arguments, got " ++ show (length argPatterns)
+            errorWithPosition constructorAst $ 
+              "Constructor " ++ T.unpack constructorName ++ " expects " ++ 
+              show (length argTypes) ++ " arguments, got " ++ show (length argPatterns)
           
           -- Recursively convert argument patterns to pattern trees
           argTrees <- zipWithM astToPatternTree argPatterns argTypes
@@ -418,7 +528,7 @@ astToPatternTree patAst expectedType = do
           return $ PTConstructor constructorName returnType argTrees
           
         Nothing -> do
-          error $ "Unknown constructor: " ++ T.unpack constructorName
+          errorWithPosition constructorAst $ "Unknown constructor: " ++ T.unpack constructorName
 
 -- Extract argument types and return type from constructor type signature
 extractConstructorSignature :: Type -> InferM ([Type], Type)
@@ -565,5 +675,5 @@ groupPatternsByConstructor patterns =
   Map.fromListWith (++) [(name, [pattern]) | pattern@(PTConstructor name _ _) <- patterns]
 
 -- Type checking interface for AST
-typeCheckAST :: AST KProgram -> Either String (Map.Map T.Text Type)
+typeCheckAST :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
 typeCheckAST = inferProgram

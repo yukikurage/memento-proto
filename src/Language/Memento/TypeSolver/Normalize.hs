@@ -26,6 +26,8 @@ normalizeStep constructor@(TConstructor _) = constructor
 normalizeStep (TFunction t1 t2) = TFunction (normalize t1) (normalize t2)
 normalizeStep (TUnion ts) = normalizeUnion (Set.map normalize ts)
 normalizeStep (TIntersection ts) = normalizeIntersection (Set.map normalize ts)
+normalizeStep generic@(TGeneric _) = generic  -- Generic parameters unchanged
+normalizeStep (TApplication base args) = TApplication (normalize base) (map normalize args)
 
 -- Normalize union types
 normalizeUnion :: Set.Set Type -> Type

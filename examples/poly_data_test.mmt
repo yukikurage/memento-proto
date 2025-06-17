@@ -1,0 +1,7 @@
+// Polymorphic data type - Option
+data Some<T> : (value : T) => Option;
+data None<T> : () => Option;
+
+// Create some values
+val some_number : Option := Some(42);
+val none_number : Option := None();

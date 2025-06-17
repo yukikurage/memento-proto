@@ -87,11 +87,55 @@ The constraint generator now supports:
 - ✅ **If expressions**: `if(condition) { then } else { else }`
 - ✅ **Let bindings**: `let tmp : number := 2;`
 - ✅ **Block expressions**: `{ let x := 1; x + 2 }`
-- ✅ **Variable patterns**: `(input : number) =>`
-- ✅ **Wildcard patterns**: `(_ : number) =>`
 - ✅ **Pattern matching**: `switch (expr) [(pat : type) => result, ...]`
-- ✅ **Advanced pattern bounds**: Max-bound/min-bound constraint system
-- ✅ **Exhaustivity checking**: ⋀ max-bounds <: ⋁ min-bounds constraint
+- ✅ **Exhaustivity checking**: Full pattern matrix algorithm with union type support
+
+### Pattern Matching Features
+- ✅ **Variable patterns**: `(x : number) =>` - binds variable `x`
+- ✅ **Wildcard patterns**: `(_ : number) =>` - matches anything
+- ✅ **Literal patterns**: `(42 : number) =>`, `("hello" : string) =>`
+- ✅ **Constructor patterns**: `(SomeNum(x) : Maybe) =>`, `(Pair(a, b) : Pair) =>`
+- ✅ **Multi-argument constructors**: `Triple(x, y, z)` with proper arity checking
+- ✅ **Nested patterns**: `Outer(Inner(Leaf(42)))` with arbitrary depth
+- ✅ **Literal patterns in constructors**: `SomeNum(1)`, `Point(0, 0)`
+
+### Pattern Syntax IMPORTANT
+- **Zero-argument constructors require parentheses**: `A()` not `A`
+  - `(A : Type)` → Variable pattern (binds variable named `A`)
+  - `(A() : Type)` → Constructor pattern (matches constructor `A`)
+- **Constructor namespace**: Constructor functions are prefixed internally
+  - User writes: `data SomeNum : (value : number) => SomeNum;`
+  - Internal storage: `"SomeNum"` → constructor function, `"TYPE_SomeNum"` → type name
+
+## Implementation Notes for Pattern Matching
+
+### Pattern Tree Architecture
+- **PatternTree**: Core data structure supporting arbitrary nesting
+  - `PTWildcard`: Matches anything
+  - `PTVariable`: Matches anything and binds a variable
+  - `PTLiteral`: Matches specific literal values
+  - `PTConstructor`: Matches constructor with nested patterns
+- **Pattern Matrix**: Used for exhaustivity analysis (`PatternMatrix`)
+- **Pattern conversion**: `astToPatternTree` converts AST patterns to pattern trees
+
+### Exhaustivity Algorithm
+- Based on pattern matrix decomposition (simplified version)
+- Handles union types by extracting all possible constructors
+- Supports nested pattern exhaustivity checking
+- Current limitations:
+  - Simplified algorithm - full pattern matrix algorithm not yet implemented
+  - Witness generation for missing patterns is basic
+
+### Type Environment Management
+- Pattern variables are scoped to their match case
+- Uses `saveTypeEnv`/`restoreTypeEnv` for local scoping
+- Constructor names stored with `TYPE_` prefix to avoid namespace collisions
+
+### Known Edge Cases
+- Empty switch expressions correctly fail with contradictory constraints
+- Wrong constructor arity caught with clear error messages
+- Unknown constructors properly reported
+- Overlapping patterns not detected (first match wins semantics)
 
 ## Important Notes
 
@@ -99,3 +143,4 @@ The constraint generator now supports:
 - JavaScript output goes to `dist/js/` directory
 - Full AST type checking enabled in Main.hs with `typeCheckAST`
 - Type solver modules: Types, Solver, Subtype, Normalize, ConstraintGen, Demo
+- Pattern matching examples: `exhaustivity_fail_test.mmt`, `pattern_bounds_test.mmt`

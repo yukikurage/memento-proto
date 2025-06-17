@@ -1,0 +1,43 @@
+// Comprehensive polymorphism test - all working features
+
+// 1. Polymorphic functions
+val identity<T> : (x : T) => T := (x : T) => x;
+val const_42<T> : (x : T) => number := (x : T) => 42;
+val flip<A, B, C> : (f : (a : A, b : B) => C, b : B, a : A) => C := 
+  (f : (a : A, b : B) => C, b : B, a : A) => f(a, b);
+
+// 2. Polymorphic data types - Option
+data Some<T> : (value : T) => Option;
+data None<T> : () => Option;
+
+// 3. Polymorphic data types - Pair  
+data Pair<A, B> : (first : A, second : B) => Pair;
+
+// 4. Polymorphic data types - List
+data Cons<T> : (head : T, tail : List) => List;
+data Nil<T> : () => List;
+
+// 5. Using polymorphic functions (type inference)
+val test_id_num : number := identity(42);
+val test_id_str : string := identity("hello");
+val test_const : number := const_42(true);
+
+// 6. Using polymorphic data types
+val some_number : Option := Some(100);
+val none_value : Option := None();
+val my_pair : Pair := Pair(42, "test");
+val my_list : List := Cons(1, Cons(2, Nil()));
+
+// 7. Complex polymorphic functions
+val map_option<A, B> : (f : (a : A) => B, opt : Option) => Option := 
+  (f : (a : A) => B, opt : Option) => 
+    switch (opt) [
+      (Some(x) : Option) => Some(f(x)),
+      (None() : Option) => None()
+    ];
+
+// 8. Using complex polymorphic functions
+val double : (x : number) => number := (x : number) => x * 2;
+val doubled_some : Option := map_option(double, Some(21));
+
+val main : () => number := () => test_id_num;

@@ -1,0 +1,36 @@
+// Working polymorphism features showcase
+
+// 1. Basic polymorphic functions
+val identity<T> : (x : T) => T := (x : T) => x;
+val const_42<T> : (x : T) => number := (x : T) => 42;
+
+// 2. Polymorphic data types - Option
+data Some<T> : (value : T) => Option;
+data None<T> : () => Option;
+
+// 3. Polymorphic data types - Pair  
+data Pair<A, B> : (first : A, second : B) => Pair;
+
+// 4. Polymorphic data types - List
+data Cons<T> : (head : T, tail : List) => List;
+data Nil<T> : () => List;
+
+// 5. Using polymorphic functions (automatic type inference)
+val test_id_num : number := identity(42);
+val test_id_str : string := identity("hello");
+val test_const : number := const_42(true);
+
+// 6. Using polymorphic data types
+val some_number : Option := Some(100);
+val none_value : Option := None();
+val my_pair : Pair := Pair(42, "test");
+val my_list : List := Cons(1, Cons(2, Nil()));
+
+// 7. Simple helper functions
+val double : (x : number) => number := (x : number) => x * 2;
+val add_ten : (x : number) => number := (x : number) => x + 10;
+
+// 8. Function composition through calls
+val result : number := double(add_ten(identity(5)));
+
+val main : () => number := () => result;

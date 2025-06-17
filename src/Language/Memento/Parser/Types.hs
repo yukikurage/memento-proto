@@ -9,7 +9,7 @@ import Control.Applicative ((<|>))
 import Data.Text (Text)
 import Language.Memento.Data.HCoproduct (Injective (hInject))
 import qualified Language.Memento.Parser.Class as PClass
-import Language.Memento.Syntax.MType (MType (TBool, TFunction, TInt, TIntersection, TLiteral, TNever, TNumber, TString, TUnion, TUnknown, TVar))
+import Language.Memento.Syntax.MType (MType (TApplication, TBool, TFunction, TInt, TIntersection, TLiteral, TNever, TNumber, TString, TUnion, TUnknown, TVar))
 import Language.Memento.Syntax.Tag (KType)
 import Text.Megaparsec (MonadParsec (try), choice, getSourcePos, many, sepBy, (<?>))
 
@@ -139,6 +139,7 @@ parseTypeAtom ::
 parseTypeAtom =
   choice
     [ PClass.parseParens (parseTypeExpr @h) <?> "parenthesized type"
+    , try (parseTypeApplication @h) <?> "type application"
     , parseVarType @h <?> "type variable"
     , parsePrimitiveType @h <?> "primitive type"
     , parseLiteralType @h <?> "literal type"
@@ -163,6 +164,34 @@ parseVarType =
       return $ hInject $ TVar var
   )
     <?> "type variable"
+
+-- | Parse a type application like List<T> or Map<K, V>
+parseTypeApplication ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective MType h
+  , PClass.FixParser h f m
+  , PClass.VariableParser f m
+  , PClass.LiteralParser f m
+  ) =>
+  m (f KType)
+parseTypeApplication =
+  ( PClass.parseFix @h $ do
+      _ <- getSourcePos
+      -- Parse the base type (as a type variable for now)
+      baseVar <- PClass.parseVariable
+      
+      -- Parse the type arguments <T1, T2, ...>
+      PClass.parseSymbol "<"
+      args <- sepBy (parseTypeExpr @h) (PClass.parseSymbol ",")
+      PClass.parseSymbol ">"
+      
+      -- Create base type as TVar wrapped in Fix
+      baseType <- PClass.parseFix @h $ return $ hInject $ TVar baseVar
+      return $ hInject $ TApplication baseType args
+  )
+    <?> "type application"
 
 -- | Parse a primitive type
 parsePrimitiveType ::

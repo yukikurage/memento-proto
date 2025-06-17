@@ -1,0 +1,12 @@
+// Complete Option<T> implementation 
+data Some<T> : (value : T) => Option;
+data None<T> : () => Option;
+
+// Polymorphic helper functions
+val identity<T> : (x : T) => T := (x : T) => x;
+val const_42<T> : (x : T) => number := (x : T) => 42;
+
+// Test using the polymorphic types
+val some_number : Option := Some(42);
+val none_value : Option := None();
+val identity_test : number := identity(100);

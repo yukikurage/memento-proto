@@ -82,7 +82,7 @@ findMain defs =
   let
     go astD = case unHFix astD of
       _meta :*: stx -> case unDefinition stx of
-        ValDef v _ _ ->
+        ValDef v _ _ _ ->  -- Ignore type parameters
           let name = genVariable v in if name == "main" then Just name else Nothing
         _ -> Nothing
    in

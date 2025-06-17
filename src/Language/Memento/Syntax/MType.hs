@@ -24,6 +24,8 @@ data MType f a where
   TLiteral :: f KLiteral -> MType f KType
   TUnion :: List (f KType) -> MType f KType
   TIntersection :: List (f KType) -> MType f KType
+  -- Polymorphism support
+  TApplication :: f KType -> List (f KType) -> MType f KType  -- Type<Arg1, Arg2, ...>
 
 deriving instance (Show (f KLiteral), Show (f KType), Show (f KVariable)) => Show (MType f a)
 deriving instance (Eq (f KLiteral), Eq (f KType), Eq (f KVariable)) => Eq (MType f a)
@@ -41,3 +43,4 @@ instance HFunctor MType where
   hmap f (TLiteral l) = TLiteral (f l)
   hmap f (TUnion ts) = TUnion (map f ts)
   hmap f (TIntersection ts) = TIntersection (map f ts)
+  hmap f (TApplication base args) = TApplication (f base) (map f args)
