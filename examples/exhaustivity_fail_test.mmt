@@ -1,0 +1,18 @@
+// Test case that should fail exhaustivity checking
+
+data SomeNum : (value : number) => SomeNum;
+data SomeBool : (value : bool) => SomeBool;
+data NoneType : () => NoneType;
+
+type Maybe := SomeNum | SomeBool | NoneType;
+
+// This should fail exhaustivity: only handles SomeNum, missing SomeBool and NoneType
+val partial_match : (m : Maybe) => number :=
+  (m : Maybe) =>
+  switch (m) [
+    (SomeNum(n) : Maybe) => n
+    // Missing case for SomeBool and NoneType - should violate exhaustivity constraint
+  ];
+
+val main : (input : number) => number :=
+  (x : number) => partial_match(SomeNum(42));

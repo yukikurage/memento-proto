@@ -71,6 +71,13 @@ library
     Language.Memento.TypeChecker.Registration
     Language.Memento.TypeChecker.Solver
     Language.Memento.TypeChecker.Types
+    Language.Memento.TypeSolver
+    Language.Memento.TypeSolver.ConstraintGen
+    Language.Memento.TypeSolver.Demo
+    Language.Memento.TypeSolver.Normalize
+    Language.Memento.TypeSolver.Solver
+    Language.Memento.TypeSolver.Subtype
+    Language.Memento.TypeSolver.Types
   other-modules:
     Paths_memento_proto
   hs-source-dirs:

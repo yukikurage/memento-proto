@@ -7,6 +7,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
 import Language.Memento.Parser (parseProgramText)
+import Language.Memento.TypeSolver (typeCheckProgram, typeCheckAST, runAllDemos)
 
 -- import Language.Memento.TypeChecker (typeCheckProgram)
 import System.Directory (createDirectoryIfMissing)
@@ -23,12 +24,11 @@ main = do
       case parseProgramText input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
-          -- case typeCheckProgram program of
-          --   Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-          --   Right typeSolverResult -> case typeSolverResult of
-          --     Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-          --     Right () -> do
-          --       putStrLn "Type checking successful"
+          case typeCheckAST program of -- Real AST type checking
+            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+            Right typeEnv -> do
+              putStrLn "Type checking successful"
+              putStrLn $ "Type environment: " ++ show typeEnv
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
     [inputFile] -> do
@@ -43,12 +43,11 @@ main = do
       case parseProgramText input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
-          -- case typeCheckProgram program of
-          --   Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-          --   Right typeSolverResult -> case typeSolverResult of
-          --     Left err -> hPutStrLn stderr $ "Type error: " ++ show err
-          --     Right () -> do
-          --       putStrLn $ "Type checking successful"
+          case typeCheckAST program of -- Real AST type checking
+            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+            Right typeEnv -> do
+              putStrLn "Type checking successful"
+              putStrLn $ "Type environment: " ++ show typeEnv
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
           putStrLn $ "Output written to: " ++ outputFile
