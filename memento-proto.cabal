@@ -27,12 +27,17 @@ library
   exposed-modules:
     Language.Memento.Codegen
     Language.Memento.Codegen.Base
+    Language.Memento.Codegen.BinOps
+    Language.Memento.Codegen.Core
     Language.Memento.Codegen.Definitions
     Language.Memento.Codegen.Expressions
+    Language.Memento.Codegen.Literal
     Language.Memento.Codegen.Pattern
+    Language.Memento.Codegen.Programs
     Language.Memento.Data.HCoproduct
     Language.Memento.Data.HFix
     Language.Memento.Data.HFunctor
+    Language.Memento.Data.HOp
     Language.Memento.Data.HProduct
     Language.Memento.Data.NaturalTransformation
     Language.Memento.Parser

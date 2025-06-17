@@ -1,29 +1,31 @@
 // examples/adt_simple_def.mmt
 
-// Define a simple ADT for optional numbers
-data NumBool [
-  SomeNum : number -> NumBool,
-  SomeBool : bool -> NumBool
-];
+data SomeNum : (value : number) => SomeNum;
+data SomeBool : (value : bool) => SomeBool;
+
+type NumBool := SomeNum | SomeBool;
 
 // Create an instance of Some
-val present_num : NumBool := 10 |> SomeNum;
+val present_num : NumBool := SomeNum(10);
 
 // Create an instance of None
-val absent_num : NumBool := true |> SomeBool;
+val absent_num : NumBool := SomeBool(true);
 
 // Function that uses pattern matching to extract value or return default
-val get_num_or_default : NumBool -> number := 
-  branch NumBool [
-    let SomeNum n -> n,
-    let SomeBool b -> if b then 1 else 0 // Default value if None
+val get_num_or_default : (nb : NumBool) => number 
+  := 
+  (nb : NumBool) =>
+  switch (nb) [
+    (SomeNum(n) : NumBool) => n,
+    (SomeBool(b) : NumBool) => if(b){ 1 }else{ 0 } // Default value if None
   ];
 
 // Test with Some
-val test_some : number := 42 |> SomeNum |> get_num_or_default; // Expected: 42
+val test_some : number := get_num_or_default(SomeNum(42)); // Expected: 42
 
 // Test with None
-val test_none : number := true |> SomeBool |> get_num_or_default;    // Expected: 0
+val test_none : number := get_num_or_default(SomeBool(true));    // Expected: 0
 
 // Simple main to ensure it can be processed (though execution isn't the primary test here)
-val main : number -> number := let tmp -> test_some;
+val main : (input : number) => number 
+:= (tmp : number) => test_some;

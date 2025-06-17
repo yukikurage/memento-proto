@@ -1,10 +1,18 @@
-val is_even : number -> bool := (let n ->
-  if (n == 0) then true else (n - 1 |> is_odd)
-);
+val is_even : (n : number) => bool 
+  := (n : number) => 
+    if(n == 0) { 
+      true 
+    } else { 
+      is_odd(n - 1) 
+    };
 
-val is_odd : number -> bool := (let n ->
-  if (n == 0) then false else (n - 1 |> is_even)
-);
+val is_odd : (n : number) => bool 
+  := (n : number) => 
+    if(n == 0) { 
+      false 
+    } else { 
+      is_even(n - 1) 
+    };
 
-val test_even : bool := (4 |> is_even);
-val test_odd : bool := (3 |> is_odd);
+val test_even : bool := is_even(4);
+val test_odd : bool := is_odd(3);

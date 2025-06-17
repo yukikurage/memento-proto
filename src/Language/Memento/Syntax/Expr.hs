@@ -3,9 +3,11 @@
 
 module Language.Memento.Syntax.Expr where
 
+import Data.Bifunctor (Bifunctor (bimap))
 import qualified Data.Set as Set
 import Data.Text (Text)
 import GHC.Base (List)
+import Language.Memento.Data.HFunctor (HFunctor (hmap))
 import Language.Memento.Syntax.Tag (KBinOp, KExpr, KLet, KLiteral, KPattern, KType, KVariable)
 
 data Expr f a where
@@ -70,3 +72,16 @@ deriving instance
   , Ord (f KExpr)
   ) =>
   Ord (Let f a)
+
+instance HFunctor Expr where
+  hmap f (EVar v) = EVar (f v)
+  hmap f (ELiteral l) = ELiteral (f l)
+  hmap f (ELambda ps e) = ELambda (map (bimap f f) ps) (f e)
+  hmap f (EApply e es) = EApply (f e) (map f es)
+  hmap f (EMatch es cs) = EMatch (map f es) (map (bimap (map (bimap f f)) f) cs)
+  hmap f (EIf e1 e2 e3) = EIf (f e1) (f e2) (f e3)
+  hmap f (EBinOp op e1 e2) = EBinOp (f op) (f e1) (f e2)
+  hmap f (EBlock ls e) = EBlock (map f ls) (f e)
+
+instance HFunctor Let where
+  hmap f (Let p t e) = Let (f p) (f t) (f e)

@@ -14,10 +14,11 @@ import Control.Monad.Combinators.Expr
 import Data.Text (Text)
 import Language.Memento.Data.HCoproduct (Injective (hInject))
 import qualified Language.Memento.Parser.Class as PClass
+import Language.Memento.Syntax (unExpr)
 import Language.Memento.Syntax.BinOp (BinOp (Add, Div, Eq, Gt, Lt, Mul, Sub))
 import Language.Memento.Syntax.Expr (Expr (EApply, EBinOp, EBlock, EIf, ELambda, ELiteral, EMatch, EVar), Let (Let))
 import Language.Memento.Syntax.Tag (KBinOp, KExpr, KLet)
-import Text.Megaparsec (MonadParsec (notFollowedBy, try), choice, many, sepBy, sepEndBy)
+import Text.Megaparsec (MonadParsec (notFollowedBy, try), choice, getSourcePos, many, sepBy, sepEndBy, (<?>))
 import Text.Megaparsec.Char (punctuationChar, symbolChar)
 
 {-
@@ -99,6 +100,7 @@ parseIfExpr ::
   ) =>
   m (f KExpr)
 parseIfExpr = PClass.parseFix @h $ do
+  _ <- getSourcePos
   PClass.parseReservedWord "if"
   cond <- PClass.parseParens (parseExpr @h)
   thenExpr <- parseBlock @h
@@ -127,6 +129,7 @@ parseLambdaExpr ::
   ) =>
   m (f KExpr)
 parseLambdaExpr = PClass.parseFix @h $ do
+  _ <- getSourcePos
   args <-
     PClass.parseParens $
       sepEndBy
@@ -161,6 +164,7 @@ parseMatchExpr ::
   ) =>
   m (f KExpr)
 parseMatchExpr = PClass.parseFix @h $ do
+  _ <- getSourcePos
   PClass.parseReservedWord "switch"
   args <- PClass.parseParens $ sepEndBy (parseExpr @h) (PClass.parseSymbol ",")
   clauses <-
@@ -200,15 +204,19 @@ parseLet ::
   , Injective Expr h
   ) =>
   m (f KLet)
-parseLet = PClass.parseFix @h $ do
-  PClass.parseReservedWord "let"
-  pat <- PClass.parsePattern
-  PClass.parseSymbol ":"
-  typ <- PClass.parseMType
-  PClass.parseSymbol "="
-  body <- parseExpr @h
-  PClass.parseSymbol ";"
-  return $ hInject $ Let pat typ body
+parseLet =
+  ( PClass.parseFix @h $ do
+      _ <- getSourcePos
+      PClass.parseReservedWord "let"
+      pat <- PClass.parsePattern
+      PClass.parseSymbol ":"
+      typ <- PClass.parseMType
+      PClass.parseSymbol ":="
+      body <- parseExpr @h
+      PClass.parseSymbol ";"
+      return $ hInject $ Let pat typ body
+  )
+    <?> "let binding"
 
 parseBlock ::
   forall h f m s.
@@ -225,11 +233,15 @@ parseBlock ::
   , PClass.VariableParser f m
   ) =>
   m (f KExpr)
-parseBlock = PClass.parseFix @h $ do
-  PClass.parseBraces $ do
-    lets <- many (parseLet @h)
-    body <- parseExpr @h
-    return $ hInject $ EBlock lets body
+parseBlock =
+  ( PClass.parseFix @h $ do
+      _ <- getSourcePos
+      PClass.parseBraces $ do
+        lets <- many (parseLet @h)
+        body <- parseExpr @h
+        return $ hInject $ EBlock lets body
+  )
+    <?> "block expression"
 
 parseLiteral ::
   forall h f m s.
@@ -240,9 +252,13 @@ parseLiteral ::
   , PClass.LiteralParser f m
   ) =>
   m (f KExpr)
-parseLiteral = PClass.parseFix @h $ do
-  lit <- PClass.parseLiteral
-  return $ hInject $ ELiteral lit
+parseLiteral =
+  ( PClass.parseFix @h $ do
+      _ <- getSourcePos
+      lit <- PClass.parseLiteral
+      return $ hInject $ ELiteral lit
+  )
+    <?> "literal expression"
 
 parseVar ::
   forall h f m s.
@@ -253,38 +269,17 @@ parseVar ::
   , PClass.VariableParser f m
   ) =>
   m (f KExpr)
-parseVar = PClass.parseFix @h $ do
-  var <- PClass.parseVariable
-  return $ hInject $ EVar var
-
-{- | 関数適用
-例: f(x, y) や f(x)(y) のような形式
--}
-parseApp ::
-  forall h f m s.
-  ( MonadParsec s Text m
-  , PClass.CoreParser m
-  , Injective Expr h
-  , PClass.FixParser h f m
-  , PClass.PatternParser f m
-  , PClass.MTypeParser f m
-  , Injective Let h
-  , PClass.LiteralParser f m
-  , PClass.VariableParser f m
-  , PClass.PropagateFix h f
-  , Injective BinOp h
-  , Injective Let h
-  , PClass.LiteralParser f m
-  , PClass.VariableParser f m
-  ) =>
-  m (f KExpr)
-parseApp = PClass.parseFix @h $ do
-  func <- parseTerm @h
-  args <- PClass.parseParens $ sepEndBy (parseExpr @h) (PClass.parseSymbol ",")
-  return $ hInject $ EApply func args
+parseVar =
+  ( PClass.parseFix @h $ do
+      _ <- getSourcePos
+      var <- PClass.parseVariable
+      return $ hInject $ EVar var
+  )
+    <?> "variable expression"
 
 {- | 項
 | 括弧が無くても独立したものとして判断できる (そうな) もの
+| 関数適用を含む
 -}
 parseTerm ::
   forall h f m s.
@@ -301,10 +296,56 @@ parseTerm ::
   , Injective BinOp h
   ) =>
   m (f KExpr)
-parseTerm =
+parseTerm = do
+  _ <- getSourcePos
+
+  -- Parse the base term first (variable, literal, parenthesized expression, or block)
+  term <- parseTermBase @h
+
+  -- Then check for function application (zero or more sets of parentheses)
+  parseAppChain term
+ where
+  -- Parse a chain of function applications
+  parseAppChain :: f KExpr -> m (f KExpr)
+  parseAppChain term = do
+    -- Try to parse parentheses for function application
+    ( do
+        _ <- getSourcePos
+        args <-
+          PClass.parseParens $
+            sepBy
+              ( (parseExpr @h)
+                  >>= ( \res -> do
+                          return res
+                      )
+              )
+              (PClass.parseSymbol ",")
+        app <- PClass.parseFix @h $ return $ hInject $ EApply term args
+        parseAppChain app
+      )
+      <|> do
+        return term -- If no parentheses, just return the term
+
+-- | 基本的な項 (関数適用を含まない)
+parseTermBase ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , Injective Expr h
+  , PClass.FixParser h f m
+  , PClass.PatternParser f m
+  , PClass.MTypeParser f m
+  , Injective Let h
+  , PClass.LiteralParser f m
+  , PClass.VariableParser f m
+  , PClass.PropagateFix h f
+  , Injective BinOp h
+  ) =>
+  m (f KExpr)
+parseTermBase = do
+  _ <- getSourcePos
   choice
-    [ parseApp @h -- Function application
-    , PClass.parseParens (parseExpr @h) -- Recursive call to expr
+    [ PClass.parseParens (parseExpr @h) -- Recursive call to expr
     , parseBlock @h -- Block
     , parseLiteral @h -- Literal
     , parseVar @h -- Var
@@ -326,7 +367,9 @@ parseTermAndBinOp ::
   , PClass.VariableParser f m
   ) =>
   m (f KExpr)
-parseTermAndBinOp = makeExprParser (parseTerm @h) (operatorTable @h)
+parseTermAndBinOp = do
+  _ <- getSourcePos
+  makeExprParser (parseTerm @h) (operatorTable @h)
 
 -- | バイナリ演算子とタームで構成される式、若しくは関数適用、switch, lambda 式
 parseExpr ::
@@ -344,12 +387,13 @@ parseExpr ::
   , PClass.VariableParser f m
   ) =>
   m (f KExpr)
-parseExpr =
+parseExpr = do
+  _ <- getSourcePos
   choice
-    [ parseIfExpr @h
-    , parseMatchExpr @h
-    , parseLambdaExpr @h
-    , parseTermAndBinOp @h
+    [ parseIfExpr @h <?> "if expression"
+    , parseMatchExpr @h <?> "match expression"
+    , parseLambdaExpr @h <?> "lambda expression"
+    , parseTermAndBinOp @h <?> "term and binary operator expression"
     ]
 
 {-

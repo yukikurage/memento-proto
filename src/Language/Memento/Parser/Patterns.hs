@@ -26,10 +26,10 @@ parsePattern ::
   m (f KPattern)
 parsePattern =
   choice
-    [ parseVarPattern @h
-    , parseWildcardPattern @h
+    [ parseWildcardPattern @h
     , parseLiteralPattern @h
     , parseConsPattern @h
+    , parseVarPattern @h
     ]
 
 -- | Parse a variable pattern
@@ -84,7 +84,7 @@ parseConsPattern ::
   , PClass.LiteralParser f m
   ) =>
   m (f KPattern)
-parseConsPattern = PClass.parseFix @h $ do
+parseConsPattern = try $ PClass.parseFix @h $ do
   constructor <- PClass.parseVariable
   args <- PClass.parseParens $ sepBy (parsePattern @h) (PClass.parseSymbol ",")
   return $ hInject $ PCons constructor args

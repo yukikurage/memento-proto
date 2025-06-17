@@ -6,6 +6,7 @@ module Language.Memento.Syntax.Pattern where
 
 import Data.Kind (Type)
 import GHC.Base (List)
+import Language.Memento.Data.HFunctor (HFunctor (hmap))
 import Language.Memento.Syntax.Tag (KLiteral, KPattern, KType, KVariable)
 
 -- | Pattern represents a pattern in pattern matching
@@ -22,3 +23,9 @@ data Pattern (f :: Type -> Type) (a :: Type) where
 deriving instance (Show (f KVariable), Show (f KLiteral), Show (f KPattern)) => Show (Pattern f a)
 deriving instance (Eq (f KVariable), Eq (f KLiteral), Eq (f KPattern)) => Eq (Pattern f a)
 deriving instance (Ord (f KVariable), Ord (f KLiteral), Ord (f KPattern)) => Ord (Pattern f a)
+
+instance HFunctor Pattern where
+  hmap f (PVar v) = PVar (f v)
+  hmap f PWildcard = PWildcard
+  hmap f (PLiteral l) = PLiteral (f l)
+  hmap f (PCons v ps) = PCons (f v) (map f ps)

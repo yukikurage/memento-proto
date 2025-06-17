@@ -28,19 +28,19 @@ parseLexeme = L.lexeme sc
 
 parseSymbol :: (MonadParsec s Text m) => Text -> m Text
 parseSymbol n =
-  try $ L.symbol sc n <* notFollowedBy (symbolChar <|> punctuationChar)
+  try $ parseLexeme $ string n <* notFollowedBy (symbolChar <|> punctuationChar)
 
 -- | 括弧で囲まれた式
 parseParens :: (MonadParsec s Text m) => m a -> m a
-parseParens = between (parseSymbol "(") (parseSymbol ")")
+parseParens = between (L.symbol sc "(") (L.symbol sc ")")
 
 -- | 角括弧で囲まれた式
 parseBrackets :: (MonadParsec s Text m) => m a -> m a
-parseBrackets = between (parseSymbol "[") (parseSymbol "]")
+parseBrackets = between (L.symbol sc "[") (L.symbol sc "]")
 
 -- | 中括弧で囲まれた式
 parseBraces :: (MonadParsec s Text m) => m a -> m a
-parseBraces = between (parseSymbol "{") (parseSymbol "}")
+parseBraces = between (L.symbol sc "{") (L.symbol sc "}")
 
 -- | 予約語のリスト
 reservedWords :: [Text]
@@ -48,7 +48,7 @@ reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "val",
 
 -- | 予約語
 parseReservedWord :: (MonadParsec s Text m) => Text -> m ()
-parseReservedWord w = try $ parseLexeme (parseSymbol w *> notFollowedBy (alphaNumChar <|> char '_'))
+parseReservedWord w = try $ parseLexeme (string w *> notFollowedBy (alphaNumChar <|> char '_'))
 
 -- | 識別子
 parseIdentifier :: (MonadParsec s Text m, MonadFail m) => m Text

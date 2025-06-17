@@ -1,10 +1,14 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- ScopedTypeVariables might not be needed here anymore
-
-{-
+{- | Temporary stub of the type-checker.  The full implementation is commented
+  out to keep the core compiler lightweight and to avoid build errors while
+  the code-generation pipeline is being tested.
+-}
 module Language.Memento.TypeChecker where
+
+-- The real implementation lives in the commented block below.  Uncomment and
+-- fix compile errors when you want to revive the type checker.
+{-
 
 import Control.Monad (foldM, forM_, unless) -- `when` might not be needed
 import Control.Monad.Except (runExceptT, throwError)
@@ -23,6 +27,12 @@ import Language.Memento.TypeChecker.Monad
 import Language.Memento.TypeChecker.Registration
 import Language.Memento.TypeChecker.Solver (ConstraintOperator (COEqual, COLessThanOrEqual), TypeSolverError, UnsolvedEffects (UESet), serializeST, solve, typeToSolvedType)
 import Language.Memento.TypeChecker.Types
+
+{-
+  The full type checker implementation is currently disabled for the
+  lightweight build used by the JavaScript code-generator.
+  When type-checking is re-enabled, restore the original body here.
+-}
 
 -- | Type check a whole program
 typeCheckProgram :: Program -> Either ConstraintCollectorError (Either TypeSolverError ())
@@ -57,4 +67,5 @@ typeCheckProgram (Program definitions) =
       (Left err, _) -> Left err
       (Right (), ConstraintCollectorState{csConstraints = constraints, csPreferences = preferences}) ->
         Right $ solve 100 constraints preferences
--}
+
+  -}

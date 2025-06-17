@@ -7,13 +7,14 @@
 
 module Language.Memento.Parser.Definitions where
 
+import Control.Applicative ((<|>))
 import Data.Text (Text)
 import Language.Memento.Data.HCoproduct (Injective (hInject))
 import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax.Definition (Definition (..))
 import Language.Memento.Syntax.MType (MType (TFunction, TVar))
 import Language.Memento.Syntax.Tag (KDefinition)
-import Text.Megaparsec (MonadParsec, choice)
+import Text.Megaparsec (MonadParsec, choice, (<?>))
 
 parseDataDefinition ::
   forall h f m s.
@@ -29,7 +30,8 @@ parseDataDefinition = PClass.parseFix @h $ do
   name <- PClass.parseVariable
   PClass.parseSymbol ":"
   typ <- PClass.parseMType
-  PClass.parseSymbol ";"
+  -- optional trailing ';'
+  _ <- PClass.parseSymbol ";" <|> pure ""
   return $ hInject $ DataDef name typ
 
 parseValDefinition ::
@@ -47,10 +49,27 @@ parseValDefinition = PClass.parseFix @h $ do
   name <- PClass.parseVariable
   PClass.parseSymbol ":"
   typ <- PClass.parseMType
-  PClass.parseSymbol "="
+  PClass.parseSymbol ":="
   body <- PClass.parseExpr
-  PClass.parseSymbol ";"
+  _ <- PClass.parseSymbol ";"
   return $ hInject $ ValDef name typ body
+
+parseTypeDef ::
+  forall h f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , PClass.MTypeParser f m
+  , PClass.VariableParser f m
+  , Injective Definition h
+  , PClass.FixParser h f m
+  ) =>
+  m (f KDefinition)
+parseTypeDef = PClass.parseFix @h $ do
+  name <- PClass.parseVariable
+  PClass.parseSymbol ":="
+  typ <- PClass.parseMType
+  _ <- PClass.parseSymbol ";"
+  return $ hInject $ TypeDef name typ
 
 parseDefinition ::
   forall h f m s.
@@ -65,8 +84,9 @@ parseDefinition ::
   m (f KDefinition)
 parseDefinition =
   choice
-    [ PClass.parseReservedWord "val" *> parseValDefinition @h
-    , PClass.parseReservedWord "data" *> parseDataDefinition @h
+    [ PClass.parseReservedWord "val" *> parseValDefinition @h <?> "val definition"
+    , PClass.parseReservedWord "data" *> parseDataDefinition @h <?> "data definition"
+    , PClass.parseReservedWord "type" *> parseTypeDef @h <?> "type definition"
     ]
 
 -- {- | エフェクトオペレータ定義のパーサー

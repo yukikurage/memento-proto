@@ -1,107 +1,55 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.Codegen.Definitions (
-  generateDefinition,
-  generateConstructorWrapperFunctions,
-  getConstructorArity_cg,
-  isDataDef,
-  isValDef,
-  isEffectDef,
-  generateConstructorsForAdt,
-  generateSingleConstructorWrapper,
-  generateSingleOperationWrapper,
-) where
+module Language.Memento.Codegen.Definitions where
 
+import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Memento.Codegen.Expressions (generateExpr) -- For ValDef body
-import Language.Memento.Syntax (ArgumentWithMetadata (ArgumentWithMetadata), ConstructorDef (..), ConstructorDefWithMetadata (ConstructorDefWithMetadata), Definition (..), DefinitionWithMetadata (DefinitionWithMetadata), OperatorDef (OperatorDef), OperatorDefWithMetadata (OperatorDefWithMetadata), Type (..), TypeWithMetadata (TypeWithMetadata), Variable (Variable))
+import GHC.Base (List)
+import Language.Memento.Codegen.Core (genVariable, getSymName)
+import Language.Memento.Codegen.Expressions (genExpr)
+import Language.Memento.Data.HFix (unHFix)
+import Language.Memento.Data.HProduct ((:*:) (..))
+import Language.Memento.Syntax (AST, unMType)
+import Language.Memento.Syntax.MType (MType (TFunction, TVar))
+import Language.Memento.Syntax.Tag (KExpr, KType, KVariable)
 
--- Helper to check if a Definition is ValDef
-isValDef :: DefinitionWithMetadata -> Bool
-isValDef (DefinitionWithMetadata (ValDef _ _ _) _) = True
-isValDef _ = False
+type DefinitionResult = (List (Text, Text)) -- (argName, argValue) -> const argName = argValue
 
-isEffectDef :: DefinitionWithMetadata -> Bool
-isEffectDef (DefinitionWithMetadata (EffectDef{}) _) = True
-isEffectDef _ = False
+{-
+Data definition:
 
--- Helper to check if a Definition is DataDef
-isDataDef :: DefinitionWithMetadata -> Bool
-isDataDef (DefinitionWithMetadata (DataDef _ _) _) = True
-isDataDef _ = False
+data T : (A1, A2, ... An) -> T
 
--- Helper to get constructor arity for codegen
-getConstructorArity_cg :: TypeWithMetadata -> Int
-getConstructorArity_cg typ =
-  case typ of
-    TypeWithMetadata (TFunction _ (retType, _)) _ -> 1 + getConstructorArity_cg retType
-    _ -> 0
+↓
 
-generateSingleConstructorWrapper :: ConstructorDefWithMetadata -> T.Text
-generateSingleConstructorWrapper
-  ( ConstructorDefWithMetadata
-      ( ConstructorDef
-          (ArgumentWithMetadata (Variable consName) _)
-          consTypeSyntax
-        )
-      _
-    ) =
-    let arity = getConstructorArity_cg consTypeSyntax
-        argNames = map (\i -> T.pack ("arg" ++ show i)) [1 .. arity]
-        jsArgs = T.intercalate ", " argNames
-        -- Construct the payload part of the array: "arg1, arg2, ..."
-        -- If no args, this is empty. If args, it starts with a comma.
-        jsPayload = if null argNames then T.empty else T.cons ',' (T.intercalate ", " argNames)
-     in T.concat
-          [ "const "
-          , consName
-          , " = "
-          , T.concat (map (\argName -> T.pack "(" `T.append` argName `T.append` T.pack ") => ") argNames)
-          , "ret([\"" -- Opening escaped quote for constructor name string literal in JS
-          , consName
-          , "\""
-          , jsPayload -- Will be empty or like ", arg1, arg2"
-          , "]);"
-          ]
+const _SYM_T = Symbol();
+const T = (...args) => [_SYM_T, ...args];
 
-generateSingleOperationWrapper :: OperatorDefWithMetadata -> T.Text
-generateSingleOperationWrapper
-  ( OperatorDefWithMetadata
-      (OperatorDef (ArgumentWithMetadata (Variable opName) _) opTypeSyntax)
-      _
-    ) =
-    T.concat
-      [ "const "
-      , opName
-      , " = (_op_arg_) => "
-      , "([\"op" -- Opening escaped quote for constructor name string literal in JS
-      , opName
-      , "\""
-      , ", _op_arg_, (x) => ret(x)"
-      , "]);"
-      ]
+is T? scrutinee[0] === _SYM_T
+extract data
+x = scrutinee[1]
+y = scrutinee[2]
+...
+z = scrutinee[N]
 
-generateConstructorsForAdt :: DefinitionWithMetadata -> [T.Text]
-generateConstructorsForAdt (DefinitionWithMetadata (DataDef _ consDefs) _) =
-  map generateSingleConstructorWrapper consDefs
-generateConstructorsForAdt _ = [] -- Should not happen if filtered by isDataDef
+-}
 
-generateConstructorWrapperFunctions :: [DefinitionWithMetadata] -> T.Text
-generateConstructorWrapperFunctions defs =
-  let dataDefs = filter isDataDef defs
-   in T.intercalate "\n" (concatMap generateConstructorsForAdt dataDefs)
+genDataDefinition :: AST KVariable -> AST KType -> DefinitionResult
+genDataDefinition astV astT = case unHFix astT of
+  meta :*: stx -> case unMType stx of
+    TFunction ts ret -> case unHFix ret of
+      meta :*: stx -> case unMType stx of
+        TVar v ->
+              let symName = getSymName astV
+                  symDef = (symName, "Symbol()")
+                  classDef = (genVariable astV, "(...args) => [" <> symName <> ", ...args]")
+               in [symDef, classDef]
+        _ -> error ("genData: Expected TVar, got" <> (show (unMType stx)))
+    _ -> error "genData: Expected TFunction"
 
-generateOperatorsForEffect :: DefinitionWithMetadata -> [T.Text]
-generateOperatorsForEffect (DefinitionWithMetadata (EffectDef effName opDefs) _) =
-  map generateSingleOperationWrapper opDefs
-generateOperatorsForEffect _ = []
+extractData :: Text -> Int -> List Text
+extractData scrutinee numArgs =
+  map (\idx -> scrutinee <> "[" <> T.pack (show idx) <> "]") [1 .. numArgs]
 
-generateOperationWrapperFunctions :: [DefinitionWithMetadata] -> T.Text
-generateOperationWrapperFunctions defs =
-  let effectDefs = filter isEffectDef defs
-   in T.intercalate "\n" (concatMap generateOperatorsForEffect effectDefs)
-
-generateDefinition :: DefinitionWithMetadata -> T.Text
-generateDefinition (DefinitionWithMetadata (ValDef (ArgumentWithMetadata (Variable name) _) _ expr) _) =
-  T.concat ["const ", name, " = (", generateExpr expr, ")[1];"]
-generateDefinition _ = T.empty -- DataDef and EffectDef don't generate top-level JS in this function
+genValDefinition :: AST KVariable -> AST KType -> AST KExpr -> DefinitionResult
+genValDefinition astV _ astE = [(genVariable astV, genExpr astE)]

@@ -1,10 +1,15 @@
-// examples/adt_simple_def.mmt
+// examples/function_def_pattern.mmt
 
 // Define a simple ADT for optional numbers
-data NumBool [
-  SomeNum : number -> NumBool,
-];
+data SomeNum : (value : number) => NumBool;
 
-val extract_num : (NumBool -> number) := (let (SomeNum n) -> n);
+type NumBool := SomeNum;
 
-val main : number -> number := let tmp -> 42 |> SomeNum |> extract_num;
+val extract_num : (nb : NumBool) => number 
+  := (nb : NumBool) => 
+    switch(nb) [
+      (SomeNum(n) : NumBool) => n
+    ];
+
+val main : (input : number) => number 
+  := (tmp : number) => extract_num(SomeNum(42));

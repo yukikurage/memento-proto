@@ -6,7 +6,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
-import Language.Memento.Parser (parseProgram)
+import Language.Memento.Parser (parseProgramText)
 
 -- import Language.Memento.TypeChecker (typeCheckProgram)
 import System.Directory (createDirectoryIfMissing)
@@ -20,7 +20,7 @@ main = do
   case args of
     [inputFile, outputFile] -> do
       input <- TIO.readFile inputFile
-      case parseProgram input of
+      case parseProgramText input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
           -- case typeCheckProgram program of
@@ -40,7 +40,7 @@ main = do
       createDirectoryIfMissing True jsDir
 
       input <- TIO.readFile inputFile
-      case parseProgram input of
+      case parseProgramText input of
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
           -- case typeCheckProgram program of

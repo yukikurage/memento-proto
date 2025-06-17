@@ -15,7 +15,7 @@ import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax.Definition (Definition (..))
 import Language.Memento.Syntax.Literal (Literal (BoolLiteral, IntLiteral, NumberLiteral, StringLiteral))
 import Language.Memento.Syntax.Tag (KDefinition, KLiteral)
-import Text.Megaparsec (MonadParsec (try), choice, manyTill)
+import Text.Megaparsec (MonadParsec (try), choice, manyTill, (<?>))
 import Text.Megaparsec.Char (char)
 import Text.Megaparsec.Char.Lexer as L
 
@@ -40,7 +40,7 @@ parseBoolLiteral ::
   ) =>
   m (f KLiteral)
 parseBoolLiteral = PClass.parseFix @h $ do
-  bool <- PClass.parseLexeme $ True <$ PClass.parseSymbol "true" <|> False <$ PClass.parseSymbol "false"
+  bool <- PClass.parseLexeme $ True <$ PClass.parseReservedWord "true" <|> False <$ PClass.parseReservedWord "false"
   return $ hInject $ BoolLiteral bool
 
 parseIntLiteral ::
@@ -75,4 +75,10 @@ parseLiteral ::
   , Injective Literal h
   ) =>
   m (f KLiteral)
-parseLiteral = choice [parseNumberLiteral @h, parseBoolLiteral @h, parseIntLiteral @h, parseStringLiteral @h]
+parseLiteral = do
+  choice
+    [ try (parseNumberLiteral @h) <?> "number literal"
+    , try (parseBoolLiteral @h) <?> "boolean literal"
+    , try (parseIntLiteral @h) <?> "integer literal"
+    , try (parseStringLiteral @h) <?> "string literal"
+    ]

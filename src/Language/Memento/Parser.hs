@@ -7,6 +7,7 @@
 module Language.Memento.Parser where
 
 import Data.Text
+import qualified Data.Text as T
 import Data.Void
 import Language.Memento.Data.HFix (HFix (..))
 import Language.Memento.Data.HProduct ((:*:) (..))
@@ -25,6 +26,7 @@ import Language.Memento.Syntax.Metadata (Metadata)
 import Language.Memento.Syntax.Tag (KProgram)
 import Language.Memento.Syntax.Variable (Variable)
 import Text.Megaparsec
+import Text.Megaparsec (ParseErrorBundle, errorBundlePretty, parse)
 
 type Parser = Parsec Void Text
 
@@ -78,4 +80,10 @@ instance ProgramParser AST Parser where
   parseProgram = Prog.parseProgram @Syntax
 
 parseAST :: Parser (AST KProgram)
-parseAST = parseProgram
+parseAST = parseProgram <* eof
+
+{- | Convenience wrapper: parse a complete program from Text.
+  Exposes the same signature that earlier client code expected.
+-}
+parseProgramText :: T.Text -> Either (ParseErrorBundle T.Text Void) (AST KProgram)
+parseProgramText = parse (Core.parseLexeme (return ()) *> parseAST) "<stdin>"

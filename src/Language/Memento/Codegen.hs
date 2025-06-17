@@ -1,36 +1,89 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.Codegen where
+module Language.Memento.Codegen (
+  -- * Public API
+  generateJS,
+) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
+
 import Language.Memento.Codegen.Base (baseDefinitions)
-import Language.Memento.Codegen.Definitions
-import Language.Memento.Codegen.Expressions (generateExpr) -- generateExpr is still needed for generateDefinition
-import Language.Memento.Syntax (ArgumentWithMetadata (ArgumentWithMetadata), Definition (..), DefinitionWithMetadata (DefinitionWithMetadata), Program (..), Variable (Variable)) -- Removed ConstructorDef, Type as they are now handled in Definitions.hs
+import Language.Memento.Codegen.Core (genVariable)
+import Language.Memento.Codegen.Programs (generateProgram)
+import Language.Memento.Data.HFix (unHFix)
+import Language.Memento.Data.HProduct ((:*:) (..))
+import Language.Memento.Syntax (AST, unDefinition, unProgram)
+import Language.Memento.Syntax.Definition (Definition (..))
+import Language.Memento.Syntax.Program (Program (..))
+import Language.Memento.Syntax.Tag (KDefinition, KProgram, KVariable)
 
--- | JavaScriptコードの生成
-generateJS :: Program -> Text
-generateJS (Program definitions) =
-  T.concat
-    [ "'use strict';\n\n"
-    , baseDefinitions
-    , "\n\n// Generated ADT Constructor functions\n"
-    , generateConstructorWrapperFunctions definitions -- from Definitions.hs
-    , "\n\n// Generated Value definitions\n"
-    , T.intercalate "\n\n" (map generateDefinition (filter isValDef definitions)) -- from Definitions.hs
-    , finalExecutionBlock definitions -- Pass definitions to finalExecutionBlock
-    ]
+-- Additional utility imports (must appear before declarations)
 
--- finalExecutionBlock remains here as it's part of the top-level JS generation logic
-finalExecutionBlock :: [DefinitionWithMetadata] -> Text
-finalExecutionBlock definitions =
-  let valDefs = filter isValDef definitions -- isValDef from Definitions.hs
-   in if null valDefs
-        then "\n\n// No ValDefs found to execute."
-        else
-          let lastDefName = (\(DefinitionWithMetadata (ValDef (ArgumentWithMetadata (Variable name) _) _ _) _) -> name) (last valDefs)
-              mainDefExists = any (\(DefinitionWithMetadata (ValDef (ArgumentWithMetadata (Variable name) _) _ _) _) -> name == "main") valDefs
-              nameToExecute = if mainDefExists then "main" else lastDefName
-           in T.concat ["\n\nconsole.log(JSON.stringify(globalHandler(", nameToExecute, "())));"]
+import Control.Applicative ((<|>))
+
+{- | Entry point: convert a whole program AST to JavaScript source code.
+
+The generated code layout:
+
+  1. 'use strict' header
+  2. shared runtime helpers (from @baseDefinitions@)
+  3. code generated from the user's program (@generateProgram@)
+  4. optional execution block (evaluate @main@ if it exists)
+
+The resulting 'Text' can be written directly to a file.
+-}
+
+-------------------------------------------------------------------------------
+
+generateJS :: AST KProgram -> Text
+generateJS astP =
+  let
+    programCode = generateProgram astP
+    execBlock = generateExecutionBlock astP
+   in
+    T.concat
+      [ "'use strict';\n\n"
+      , baseDefinitions
+      , "\n\n"
+      , programCode
+      , execBlock
+      ]
+
+-------------------------------------------------------------------------------
+-- Helpers --------------------------------------------------------------------
+-------------------------------------------------------------------------------
+
+{- | Generate a small block of JS that executes either:
+  * the user-defined function/value named @main@ (if present), or
+  * nothing at all (empty string) when no such definition exists.
+  When @main@ is a function we call it with no arguments;
+  otherwise we just log it as is.
+-}
+
+-------------------------------------------------------------------------------
+
+generateExecutionBlock :: AST KProgram -> Text
+generateExecutionBlock astP =
+  case unHFix astP of
+    _meta :*: stx ->
+      case unProgram stx of
+        Program defs ->
+          let mMain = findMain defs
+           in case mMain of
+                Nothing -> "" -- do nothing
+                Just varName ->
+                  T.concat
+                    ["\n\nconsole.log(JSON.stringify(", varName, "()));"]
+
+-- | Search for a value definition named @main@ and return its JS identifier.
+findMain :: [AST KDefinition] -> Maybe Text
+findMain defs =
+  let
+    go astD = case unHFix astD of
+      _meta :*: stx -> case unDefinition stx of
+        ValDef v _ _ ->
+          let name = genVariable v in if name == "main" then Just name else Nothing
+        _ -> Nothing
+   in
+    foldr (\d acc -> acc <|> go d) Nothing defs

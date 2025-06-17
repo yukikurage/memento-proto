@@ -4,5 +4,5 @@ val helper : number := 42;
 
 val message : number := 100;
 
-val main : number -> number := let x -> 
-  helper + message; // 42 + 100 = 142 
+val main : (input : number) => number 
+  := (x : number) => helper + message; // 42 + 100 = 142 
