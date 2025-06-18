@@ -33,6 +33,7 @@ data InferContext = InferContext
   , icConstraints :: ConstraintSet
   , icTypeEnv :: Map.Map T.Text TypeScheme  -- Store type schemes for polymorphism
   , icConstructors :: Set.Set T.Text  -- Track known constructor names
+  , icVariances :: TypeConstructorVariances  -- Track variance info for type constructors
   } deriving (Show)
 
 type InferM = State InferContext
@@ -88,6 +89,18 @@ isConstructor :: T.Text -> InferM Bool
 isConstructor name = do
   ctx <- get
   return $ Set.member name (icConstructors ctx)
+
+-- Add variance information for a type constructor
+addVarianceInfo :: T.Text -> VarianceMap -> InferM ()
+addVarianceInfo constructorName varianceMap = do
+  ctx <- get
+  put ctx { icVariances = Map.insert constructorName varianceMap (icVariances ctx) }
+
+-- Look up variance information for a type constructor  
+lookupVariance :: T.Text -> InferM (Maybe VarianceMap)
+lookupVariance constructorName = do
+  ctx <- get
+  return $ Map.lookup constructorName (icVariances ctx)
 
 -- Save current type environment
 saveTypeEnv :: InferM (Map.Map T.Text TypeScheme)
@@ -145,6 +158,7 @@ convertMType ast =
       case maybeType of
         Just (TConstructor _) -> return $ TConstructor name  -- Use ground type if registered  
         Just (TUnion types) -> return $ TUnion types  -- Resolve union types for exhaustivity
+        Just (TGeneric genericName) -> return $ TGeneric genericName  -- Preserve generic types
         Just _ -> return $ TVar (TypeVar name)  -- Use variable for other types
         Nothing -> return $ TVar (TypeVar name)  -- Unknown name, use variable
     SMType.TLiteral litAst ->
@@ -337,6 +351,12 @@ inferPolyDataDecl constructorName typeParams typeAst = do
   let genericType = foldr (\paramName acc -> 
         substituteTypeVar (TypeVar paramName) (TGeneric paramName) acc) constructorType paramNames
   
+  -- Analyze variance of type parameters in the constructor type
+  let varianceMap = analyzeVariance paramNames genericType
+  -- Debug: print variance information (remove this in production)
+  let debugInfo = "Variance for " ++ T.unpack constructorName ++ ": " ++ show varianceMap
+  addVarianceInfo constructorName varianceMap
+  
   -- Register as constructor
   addConstructor constructorName
   
@@ -423,7 +443,7 @@ inferProgramM ast =
 -- Main inference function
 inferProgram :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
 inferProgram ast =
-  let initialCtx = InferContext 0 Set.empty Map.empty Set.empty
+  let initialCtx = InferContext 0 Set.empty Map.empty Set.empty Map.empty
       ((), finalCtx) = runState (inferProgramM ast) initialCtx
       constraints = icConstraints finalCtx
   in case solveConstraints constraints of

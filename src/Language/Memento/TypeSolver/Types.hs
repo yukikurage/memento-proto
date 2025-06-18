@@ -11,9 +11,7 @@ import Data.Text (Text)
 
 -- Type representation
 data Type
-  = TTop
-  | TBottom
-  | TNumber
+  = TNumber
   | TBool
   | TString
   | TNever
@@ -46,6 +44,81 @@ data TypeScheme = TypeScheme [T.Text] Type  -- forall [a1, a2, ...] . Type
 monoType :: Type -> TypeScheme
 monoType t = TypeScheme [] t
 
+-- Variance analysis for type parameters
+data Variance = Covariant | Contravariant | Invariant
+  deriving (Eq, Ord, Show)
+
+-- Combine variances when a type parameter appears in multiple positions
+combineVariance :: Variance -> Variance -> Variance
+combineVariance Covariant Covariant = Covariant
+combineVariance Contravariant Contravariant = Contravariant
+combineVariance _ _ = Invariant  -- Mixed usage = invariant
+
+-- Flip variance when entering contravariant position (like function arguments)
+flipVariance :: Variance -> Variance
+flipVariance Covariant = Contravariant
+flipVariance Contravariant = Covariant
+flipVariance Invariant = Invariant
+
+-- Variance information for a type constructor
+-- Maps type parameter names to their variance
+type VarianceMap = Map.Map T.Text Variance
+
+-- Global registry of variance information for type constructors
+type TypeConstructorVariances = Map.Map T.Text VarianceMap
+
+-- Analyze variance of type parameters in a type expression
+-- Given a list of type parameter names and a type expression,
+-- determine the variance of each parameter
+analyzeVariance :: [T.Text] -> Type -> VarianceMap
+analyzeVariance paramNames typeExpr = 
+  let initialMap = Map.fromList [(name, Invariant) | name <- paramNames]
+      varianceMap = foldl (\acc param -> 
+                            Map.insert param (analyzeParameterVariance param typeExpr Covariant) acc
+                          ) initialMap paramNames
+  in varianceMap
+
+-- Analyze variance of a specific type parameter in a type expression
+analyzeParameterVariance :: T.Text -> Type -> Variance -> Variance
+analyzeParameterVariance paramName typeExpr currentVariance = case typeExpr of
+  -- Base cases - no variance contribution  
+  TNumber -> Invariant
+  TBool -> Invariant
+  TString -> Invariant
+  TNever -> Invariant
+  TUnknown -> Invariant
+  TLiteral _ -> Invariant
+  TVar _ -> Invariant
+  TConstructor _ -> Invariant
+  
+  -- Generic type parameter - this is where we find our target!
+  TGeneric name -> if name == paramName then currentVariance else Invariant
+  
+  -- Function type - argument is contravariant, return is covariant
+  TFunction argType retType ->
+    let argVariance = analyzeParameterVariance paramName argType (flipVariance currentVariance)
+        retVariance = analyzeParameterVariance paramName retType currentVariance
+    in combineVariance argVariance retVariance
+    
+  -- Union type - maintains current variance for all members
+  TUnion types ->
+    let variances = map (\t -> analyzeParameterVariance paramName t currentVariance) (Set.toList types)
+    in foldl combineVariance Invariant variances
+    
+  -- Intersection type - maintains current variance for all members  
+  TIntersection types ->
+    let variances = map (\t -> analyzeParameterVariance paramName t currentVariance) (Set.toList types)
+    in foldl combineVariance Invariant variances
+    
+  -- Type application - need to look up variance of the base type
+  -- For now, assume all arguments are covariant (this needs the variance registry)
+  TApplication baseType argTypes ->
+    let baseVariance = analyzeParameterVariance paramName baseType currentVariance
+        -- TODO: This should use the variance info of baseType to determine
+        -- the variance context for each argument position
+        argVariances = map (\t -> analyzeParameterVariance paramName t currentVariance) argTypes
+    in foldl combineVariance baseVariance argVariances
+
 -- Constraints
 data Constraint = Subtype Type Type
   deriving (Eq, Ord, Show)
@@ -65,19 +138,17 @@ data SolveResult
 
 -- Helper constructors
 mkUnion :: [Type] -> Type
-mkUnion [] = TBottom
+mkUnion [] = TNever
 mkUnion [t] = t
 mkUnion ts = TUnion (Set.fromList ts)
 
 mkIntersection :: [Type] -> Type
-mkIntersection [] = TTop
+mkIntersection [] = TUnknown
 mkIntersection [t] = t
 mkIntersection ts = TIntersection (Set.fromList ts)
 
 -- Check if type contains variables
 containsVar :: Type -> Bool
-containsVar TTop = False
-containsVar TBottom = False
 containsVar TNumber = False
 containsVar TBool = False
 containsVar TString = False
@@ -94,8 +165,6 @@ containsVar (TApplication base args) = containsVar base || any containsVar args
 
 -- Get all type variables in a type
 typeVars :: Type -> Set.Set TypeVar
-typeVars TTop = Set.empty
-typeVars TBottom = Set.empty
 typeVars TNumber = Set.empty
 typeVars TBool = Set.empty
 typeVars TString = Set.empty
@@ -112,8 +181,6 @@ typeVars (TApplication base args) = typeVars base `Set.union` Set.unions (map ty
 
 -- Apply substitution to a type
 applySubst :: Substitution -> Type -> Type
-applySubst _ TTop = TTop
-applySubst _ TBottom = TBottom
 applySubst _ TNumber = TNumber
 applySubst _ TBool = TBool
 applySubst _ TString = TString
@@ -139,8 +206,6 @@ applySubstConstraint s (Subtype t1 t2) = Subtype (applySubst s t1) (applySubst s
 
 -- Get free generic variables in a type
 freeGenerics :: Type -> Set.Set T.Text
-freeGenerics TTop = Set.empty
-freeGenerics TBottom = Set.empty
 freeGenerics TNumber = Set.empty
 freeGenerics TBool = Set.empty
 freeGenerics TString = Set.empty
@@ -167,8 +232,6 @@ instantiate (TypeScheme quantified t) freshVars =
 
 -- Substitute generic type parameters with types
 substituteGenerics :: Map.Map T.Text Type -> Type -> Type
-substituteGenerics _ TTop = TTop
-substituteGenerics _ TBottom = TBottom
 substituteGenerics _ TNumber = TNumber
 substituteGenerics _ TBool = TBool
 substituteGenerics _ TString = TString

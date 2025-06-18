@@ -1,199 +1,283 @@
-# Partial Type Solver
+# Memento Type Solver - Current Implementation
 
-## Prerequisites
+## Overview
 
-Including Lit and and/or (representing intersect and union)
+This document describes the constraint-based type solver for the Memento programming language. The solver handles advanced type system features including polymorphism, union/intersection types, subtyping, and exhaustive pattern matching.
 
-S, T = Top | Bottom | T -> T | or (Tn) | and (Tn) | int | num... | 1 | 2 ... | true | false
+## Type System
 
-VS, VT = Top | Bottom | VT -> VT | ... | x (type variable)
+### Core Types
 
-for typing.
+```haskell
+data Type
+  = TTop | TBottom          -- Top and bottom types
+  | TNumber | TBool | TString | TNever | TUnknown  -- Primitive types
+  | TLiteral Literal        -- Literal types (42, true, "hello")
+  | TVar TypeVar           -- Fresh type variables (unification variables)
+  | TConstructor T.Text    -- Named constructors (distinct ground types)  
+  | TFunction Type Type    -- Function types
+  | TUnion (Set Type)      -- Union types (A | B)
+  | TIntersection (Set Type)  -- Intersection types (A & B)
+  -- Polymorphism support
+  | TGeneric T.Text           -- Generic type parameters (T, U, V)
+  | TApplication Type [Type]  -- Type applications (List<T>, Map<K,V>)
+```
 
-Assume subtyping computation can only be done with T that doesn't contain type variables
+### Polymorphism Support
 
-Subtyping computation
+- **Type Schemes**: `TypeScheme [vars] type` represents `forall vars. type`
+- **Generalization**: Convert monomorphic types to polymorphic type schemes
+- **Instantiation**: Create fresh type variables when using polymorphic values
+- **Variance Analysis**: Automatic detection of covariant/contravariant type parameters
 
-or (Tn)
+### Constraint Language
+
+The solver works with subtype constraints:
+```haskell
+data Constraint = Subtype Type Type  -- t1 <: t2
+```
 
-Constraint
+## Algorithm Overview
 
-VT <: VT
+The type solver follows a multi-step constraint solving algorithm:
 
-Attempt to solve for sets of these.
+```
+1. Constraint Decomposition
+2. Contradiction Detection  
+3. Boundary Calculation
+4. Type Unification
+5. Branch Splitting (if needed)
+```
 
-## Basic Approach
+The algorithm repeats steps 1-4 until either:
+- **Success**: All constraints solved with consistent substitution
+- **Contradiction**: Inconsistent constraints detected
+- **Ambiguity**: Multiple solutions exist, handled by branching
 
-Receives:
+## Detailed Algorithm Steps
+
+### Step 1: Constraint Decomposition
 
-cts : Set [Constraint]
+Decomposes complex constraints into simpler forms by applying structural rules:
 
-### 1. Decompose contents of cts appropriately, reducing as much as possible to x <: VT or VT <: x form
+#### Union Type Decomposition
+```
+or(A, B, C) <: T  →  A <: T, B <: T, C <: T
+```
 
-List of basic decomposition operations:
+#### Intersection Type Decomposition  
+```
+S <: and(A, B, C)  →  S <: A, S <: B, S <: C
+```
 
-- VS <: and (VTn)
-  → For n, VS <: VT_n
-- or (VSn) <: VT
-  → For n, VS_n <: VT
-- (VS1 -> VS2) <: (VT1 -> VT2)
-  → VT1 <: VS1 and VS2 <: VT2
+#### Function Type Decomposition (Contravariant in arguments)
+```
+(A1 -> R1) <: (A2 -> R2)  →  A2 <: A1, R1 <: R2
+```
 
-After applying these, we reduce to the following forms (?)
+#### Type Application Decomposition (with variance awareness)
+```
+F<A1, B1> <: F<A2, B2>  →  constraints based on parameter variance
+```
+
+### Step 2: Contradiction Detection
 
-i. Both sides are T ← Happy!
-ii. One side is x and the other is VT ← Pretty happy!
-iii. Right side is or, left side is not x
+Identifies constraints that are immediately solvable or contradictory:
 
-- VS <: or (VTn)
+#### Checkable Constraints
+- **Concrete types**: `number <: bool` (can check immediately)
+- **Reflexivity**: `x <: x` (always true)
+- **Generic reflexivity**: `T <: T` (always true for same generic)
+- **Function vs non-function**: `(A -> B) <: number` (always false)
 
-iv. Left side is and, right side is not x
+#### Generic Type Handling
+- **Same generics**: `T <: T` → no contradiction
+- **Different generics**: `T <: U` → potential contradiction
+- **Generic vs concrete**: `T <: number` → no immediate contradiction
 
-- and (VSn) <: VT
+### Step 3: Boundary Calculation
+
+For each type variable `x`, collects all lower and upper bounds:
 
-v. One side is a func type of VT, and the other side is neither x nor func nor and/or, therefore becomes one of:
-
-- VS1 -> VS2 <: int/num... /0/1 ...
-- int/num...0/1/... <: VS1 -> VS2
-- VS1 -> VS2 <: Top/Bottom
-- Top/Bottom <: VS1 -> VS2
-
-### 2. Contradiction Check for cts
-
-For case i, we can definitively check subtyping (really?)
-Same for case v
-
-As a special case of ii, we have x <: x. This doesn't cause contradiction so OK! → Mark as checked
-
-If contradiction occurs, reject the branch as cts is contradictory
-Remove checked items from cts
-
-### 3. Boundary Calculation and Boundary Condition Propagation
-
-From previous work, only cases ii, iii, iv remain
-
-Here, use ii (where one side is x) to calculate type boundaries
-
-Collecting all lower and upper bounds:
-
-{lower bound types...} <: x <: {upper bound types...}
-
-Note that since x may still exist in iii, iv and (the non-variable side of ii), satisfying these lower and upper bounds doesn't guarantee type resolution
-
-※ Cases iii, iv are clearly problematic, but for case ii we have examples like:
-
-x <: number
-(1 -> number) <: y <: (x -> number)
-
-In this set, if x ~ 1 then OK, but if x ~ number then contradiction
-
-Now, for calculated lower bounds VS_n, VT_n, add new Constraint to cts:
-
-or (VS_m) <: and (VT_n) # normalize might be effective here
-
-(Excluding already added or trivially contradictory ones)
-Also, unify x-related constraints to only:
-or (VS_m) <: x and
-
-x <: and (VT_n).
-
-### 4. Trivial Assignment and cts Refinement
-
-If the same expression appears in both upper and lower bounds, assign to x.
-
-Repeat 1 ~ 4 until no changes occur
-
-### 5. Branch Splitting → If unable to split, go to 7
-
-The following forms of Constraint remain:
-
-ii. One side is x and the other is VT
-iii. Right side is or, left side is not x
-iv. Left side is and, right side is not x
-
-Here we decompose ii into two:
-
-ii(a). One side is x and the other is Top, Bottom, variable, 1, 2..., num, int,... (simple types)
-ii(b). One side is x and the other is function (note: and/or are eliminated by iii, iv and decomposition)
-
-For iii, iv, ii(b), decompose cts as follows:
-
-#### Case ii(b)
-
-Copy cts to cts1 and cts2
-
-For x <: VS -> VT
-x must be Bottom or function type.
-
-- In cts1, assign Bottom to x
-- In cts2, assign y -> z to x with new variables y, z
-
-For VS -> VT <: x
-x must be Top or function type
-
-- In cts1, assign Top to x
-- In cts2, assign y -> z to x with new variables y, z
-
-Delete original Constraint
-
-#### Case iii
-
-We have x <: or (VTn)
-
-Create n cts, each adding constraint x <: VTn
-
-Delete original Constraint
-
-#### Case iv
-
-Same as iii
-
-### 6. Computation of Branched cts
-
-Solve each branch, if a non-contradictory branch is found then no contradiction, if all have contradictions, then contradiction
-
-### 7. Contradiction/Non-contradiction Determination
-
-Only ii(b) remains. That is, reduced to constraints between Top, Bottom, x, lit, prim.
-
-By constraint propagation in 4, if no contradiction at this point, can consider non-contradictory (unproven, needs verification, or counterexample)
-→ ChatGPT says it's fine if there are no cycles! But I think cycles disappear in 4, when y <: x <: y occurs, x <= y is assigned
-
-## Appendix
-
-### About Normalize
-
-In various and/or operations, converting to simpler forms produces better results. Perform the following conversions:
-
-VT | Bottom = VT
-VT | Top = Top
-VT | VT = VT
-VT & Bottom = Bottom
-VT & Top = VT
-VT & VT = VT
-
-T1 | T2 where T1 <: T2 = T2 (since computing subtyping, only for types without variables)
-T1 & T2 where T1 <: T2 = T1
-
-Distributive law (lean towards or) (possible performance degradation?) (reverse conversion might be better, though finding common parts seems tedious)
-
-VT1 & (VT2 | VT3) = (VT1 & VT2) | (VT1 & VT3)
-
-Functionalization (increases possibility of using function decomposition laws?)
-
-(VT1 -> VT2) | (VT3 -> VT4) = (VT1 & VT2 -> VT2 | VT4)
-(VT1 -> VT2) & (VT3 -> VT4) = (VT1 | VT2 -> VT2 & VT4)
-
-For example, on left side use |, on right side use function (same for &) might be good - want to use decomposition rules as much as possible
-
-Absorption
-
-VT1 & (VT1 | VT2) = VT1
-
-VT1 | (VT1 & VT2) = VT1
-
-Backend is JavaScript, basically
-
-The meaning of (A -> B) | (C -> D) is "function type that is either A -> B or C -> D", and since no type conversion is involved here, it's legal to apply A & B to this function to get C | D. Conversely (A & B) -> (C | D) can also be seen as (A -> B) | (C -> D) (extensional equivalence). Since we restrict use of JavaScript's instanceof etc., these types become equal
-
-Branching is special. If A <: distinguishable, then branch : A | B -> (A -> C) -> B | C is possible.
+```
+{lower1, lower2, ...} <: x <: {upper1, upper2, ...}
+```
+
+#### Bidirectional Constraint Preservation
+- **Critical Fix**: Preserves all constraint information without removing constraints
+- Handles generic type bounds: `x <: T`, `T <: x`
+- Maintains relationships between multiple variables
+
+#### Bound Extraction
+- **Lower bounds**: From constraints `T <: x`
+- **Upper bounds**: From constraints `x <: T`
+- **Generic bounds**: From constraints involving `TGeneric` types
+
+### Step 4: Type Unification
+
+Attempts to find a unique type for variables with convergent bounds:
+
+#### Sound Unification Logic
+```haskell
+unifyBounds :: Bounds -> Maybe Type
+unifyBounds (Bounds lowers uppers) =
+  case findCommonTypes lowers uppers of
+    [] -> Nothing        -- No common type
+    [t] -> Just t       -- Exactly one common type
+    _ -> Nothing        -- Multiple common types = ambiguous
+```
+
+#### Critical Soundness Fix
+- **Old (unsound)**: `([t], []) -> Just t` - could assign any supertype
+- **New (sound)**: Only unify when type appears in **both** bounds
+- **Rationale**: Ensures assigned type satisfies all constraints
+
+#### Unification Exclusions
+- Type variables are not unified (remain as variables)
+- Generic types are not unified (represent parameters, not unknowns)
+
+### Step 5: Branch Splitting
+
+When no progress can be made, splits ambiguous constraints:
+
+#### Union Type Branching
+```
+x <: A | B  →  Branch 1: x <: A
+              Branch 2: x <: B
+```
+
+#### Intersection Type Branching  
+```
+A & B <: x  →  Branch 1: A <: x
+              Branch 2: B <: x
+```
+
+#### Generic Type Branching
+- Supports branching with generic types
+- Handles `T <: A | B` and `A & B <: T`
+
+## Polymorphism Integration
+
+### Type Parameter Binding
+1. **Declaration**: `val identity<T> : (x : T) => T`
+2. **Generalization**: Create `TypeScheme ["T"] (TFunction (TGeneric "T") (TGeneric "T"))`
+3. **Instantiation**: When used, replace `T` with fresh type variables
+
+### Constraint Generation with Generics
+- Generic types `TGeneric "T"` participate in subtyping
+- Automatic variance analysis determines parameter relationships
+- Type applications `List<T>` decompose according to variance
+
+### Variance Analysis
+```haskell
+data Variance = Covariant | Contravariant | Invariant
+
+-- Examples:
+data Box<T> : (value : T) => Box        -- T is covariant
+data Processor<T> : (f : (T) => number) => Processor  -- T is contravariant
+data Cell<T> : (get : () => T, set : (T) => ()) => Cell  -- T is invariant
+```
+
+## Pattern Matching Integration
+
+### Exhaustivity Constraints
+The type solver integrates with pattern matching through exhaustivity constraints:
+
+```haskell
+-- For switch expressions, generate constraint:
+⋀ max-bounds <: ⋁ min-bounds
+
+-- Where:
+-- max-bounds = union of all possible constructor types
+-- min-bounds = union of all covered pattern types
+```
+
+### Pattern Type Bounds
+- **Max-bound**: What the pattern declares it matches (`(x : Option) => ...`)
+- **Min-bound**: What the pattern actually covers (`Some(_)` covers `Some<T>`)
+- **Exhaustivity**: Ensures all possible cases are covered
+
+## Error Handling and Position Reporting
+
+### Position-Aware Error Messages
+- Constraints track source positions through AST metadata
+- Error messages include file location and code range
+- Enhanced debugging for polymorphic type errors
+
+### Common Error Patterns
+- **Missing pattern cases**: Exhaustivity constraint fails
+- **Type mismatch**: Contradiction in constraint solving
+- **Ambiguous types**: Multiple valid solutions exist
+- **Infinite types**: Circular type constraints (detected during unification)
+
+## Critical Soundness Properties
+
+### 1. Unification Soundness
+- **Property**: Unification only occurs when type appears in both bounds
+- **Guarantee**: Assigned types satisfy all subtyping constraints
+- **Prevents**: Unsound type assignments that violate program semantics
+
+### 2. Bidirectional Constraint Preservation  
+- **Property**: `x <: y` generates bounds for both `x` and `y`
+- **Guarantee**: All constraint relationships are preserved through solving
+- **Prevents**: Lost constraint information leading to incorrect types
+
+### 3. Generic Type Consistency
+- **Property**: Generic types are handled uniformly throughout solver
+- **Guarantee**: Polymorphic types maintain parametricity
+- **Prevents**: Generic type variables being unified incorrectly
+
+## Implementation Architecture
+
+### Module Structure
+```
+TypeSolver/
+├── Types.hs          -- Core type definitions, polymorphism, variance
+├── Solver.hs         -- Main constraint solving algorithm  
+├── ConstraintGen.hs  -- Constraint generation from AST
+├── Subtype.hs        -- Subtyping algorithm
+├── Normalize.hs      -- Type normalization (unions/intersections)
+└── Demo.hs          -- Testing and examples
+```
+
+### Key Data Structures
+```haskell
+-- Constraint solving state
+data InferContext = InferContext
+  { icVarCounter :: Int                           -- Fresh variable counter
+  , icConstraints :: ConstraintSet                -- Active constraints
+  , icTypeEnv :: Map T.Text TypeScheme           -- Polymorphic type environment
+  , icConstructors :: Set T.Text                 -- Known constructors
+  , icVariances :: TypeConstructorVariances     -- Variance information
+  }
+
+-- Constraint solving results
+data SolveResult
+  = Success Substitution      -- Solution found
+  | Contradiction            -- No solution exists
+  | Ambiguous [ConstraintSet] -- Multiple solutions (branching needed)
+```
+
+## Future Extensions
+
+### Planned Improvements
+1. **Full Variance-Aware Decomposition**: Use variance information in type application decomposition
+2. **Higher-Rank Polymorphism**: Support for rank-N types
+3. **Dependent Types**: Limited dependent typing for array bounds, etc.
+4. **Effect Types**: Integration with effect system for tracking side effects
+
+### Research Directions
+1. **Constraint Optimization**: More efficient constraint solving algorithms
+2. **Incremental Solving**: Reuse solved constraints across compilation units
+3. **Error Recovery**: Better error messages with suggested fixes
+4. **Type Inference Debugging**: Visual constraint solving traces
+
+## References
+
+This implementation is based on:
+- Pierce's "Types and Programming Languages" (TAPL)
+- Dolan & Mycroft's "Polymorphism, Subtyping, and Type Inference in MLsub"
+- Gaster & Jones's "A Polymorphic Type System for Extensible Records and Variants"
+- Modern constraint-based type inference research
+
+The algorithm maintains soundness while supporting advanced features like parametric polymorphism, union/intersection types, and exhaustive pattern matching.

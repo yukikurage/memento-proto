@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Language.Memento.Syntax
 import Language.Memento.TypeChecker.Monad
-import Language.Memento.TypeChecker.Solver (ConstraintOperator (COEqual, COGreaterThanOrEqual, COLessThanOrEqual), Preference (Maximize), SolvedType (STAlgebraicData, STBool, STNumber, STTuple), UnsolvedType (UTAlgebraicData, UTBottom, UTFunction, UTHandler, UTTuple, UTVar), UnsolvedTypeVariable (UnsolvedTypeVariable), serializeST, typeToSolvedType)
+import Language.Memento.TypeChecker.Solver (ConstraintOperator (COEqual, COGreaterThanOrEqual, COLessThanOrEqual), Preference (Maximize), SolvedType (STAlgebraicData, STBool, STNumber, STTuple), UnsolvedType (UTAlgebraicData, UTNever, UTFunction, UTHandler, UTTuple, UTVar), UnsolvedTypeVariable (UnsolvedTypeVariable), serializeST, typeToSolvedType)
 import Language.Memento.TypeChecker.Types
 
 -- | パターンを表す型変数はパターンがカバーできる範囲になるように solve される

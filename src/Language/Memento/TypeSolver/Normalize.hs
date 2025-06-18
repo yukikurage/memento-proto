@@ -13,8 +13,6 @@ normalize t = fixpoint normalizeStep t
       in if x == x' then x else fixpoint f x'
 
 normalizeStep :: Type -> Type
-normalizeStep TTop = TTop
-normalizeStep TBottom = TBottom
 normalizeStep TNumber = TNumber
 normalizeStep TBool = TBool
 normalizeStep TString = TString
@@ -33,18 +31,18 @@ normalizeStep (TApplication base args) = TApplication (normalize base) (map norm
 normalizeUnion :: Set.Set Type -> Type
 normalizeUnion ts =
   let ts' = Set.toList ts
-      -- Remove Bottom
-      withoutBottom = filter (/= TBottom) ts'
-      -- Check for Top
-      hasTop = TTop `elem` ts'
+      -- Remove TNever
+      withoutNever = filter (/= TNever) ts'
+      -- Check for TUnknown
+      hasUnknown = TUnknown `elem` ts'
       -- Remove duplicates (handled by Set)
       -- Flatten nested unions
-      flattened = concatMap flattenUnion withoutBottom
+      flattened = concatMap flattenUnion withoutNever
       -- Remove subtypes if we can check without variables
       simplified = removeSubtypes flattened
-  in case (hasTop, simplified) of
-    (True, _) -> TTop
-    (False, []) -> TBottom
+  in case (hasUnknown, simplified) of
+    (True, _) -> TUnknown
+    (False, []) -> TNever
     (False, [t]) -> t
     (False, ts'') -> TUnion (Set.fromList ts'')
 
@@ -52,17 +50,17 @@ normalizeUnion ts =
 normalizeIntersection :: Set.Set Type -> Type
 normalizeIntersection ts =
   let ts' = Set.toList ts
-      -- Remove Top
-      withoutTop = filter (/= TTop) ts'
-      -- Check for Bottom
-      hasBottom = TBottom `elem` ts'
+      -- Remove TUnknown
+      withoutUnknown = filter (/= TUnknown) ts'
+      -- Check for TNever
+      hasNever = TNever `elem` ts'
       -- Flatten nested intersections
-      flattened = concatMap flattenIntersection withoutTop
+      flattened = concatMap flattenIntersection withoutUnknown
       -- Remove supertypes if we can check without variables
       simplified = removeSupertypes flattened
-  in case (hasBottom, simplified) of
-    (True, _) -> TBottom
-    (False, []) -> TTop
+  in case (hasNever, simplified) of
+    (True, _) -> TNever
+    (False, []) -> TUnknown
     (False, [t]) -> t
     (False, ts'') -> TIntersection (Set.fromList ts'')
 

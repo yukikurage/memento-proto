@@ -72,8 +72,8 @@ data SolvedType
   | STFunction SolvedType (SolvedType, SolvedEffects)
   | STAlgebraicData TypeVariable -- 代数的データ型
   | STTuple ([] SolvedType) -- タプル型
-  | STBottom -- 全ての部分型
-  | STTop -- 全ての上位型
+  | STNever -- 全ての部分型
+  | STUnknown -- 全ての上位型
   deriving (Show, Eq, Generic)
 
 newtype UnsolvedTypeVariable = UnsolvedTypeVariable Text deriving (Show, Eq, Generic, Ord)
@@ -87,8 +87,8 @@ data UnsolvedType
   | UTFunction UnsolvedType (UnsolvedType, UnsolvedEffects)
   | UTAlgebraicData TypeVariable -- 代数的データ型
   | UTTuple ([] UnsolvedType) -- タプル型
-  | UTBottom -- 全ての部分型
-  | UTTop -- 全ての上位型
+  | UTNever -- 全ての部分型
+  | UTUnknown -- 全ての上位型
   deriving (Show, Eq, Generic)
 
 {-
@@ -255,8 +255,8 @@ parseUT = \case
   UTTuple ts -> do
     ts' <- mapM parseUT ts
     return $ STTuple ts'
-  UTBottom -> Just STBottom
-  UTTop -> Just STTop
+  UTNever -> Just STNever
+  UTUnknown -> Just STUnknown
 
 parseUE :: UnsolvedEffects -> Maybe SolvedEffects
 parseUE = \case
@@ -280,8 +280,8 @@ serializeST = \case
   STFunction t (t', e') -> UTFunction (serializeST t) (serializeST t', serializeSE e')
   STAlgebraicData v -> UTAlgebraicData v
   STTuple ts -> UTTuple $ map serializeST ts
-  STBottom -> UTBottom
-  STTop -> UTTop
+  STNever -> UTNever
+  STUnknown -> UTUnknown
 
 serializeSE :: SolvedEffects -> UnsolvedEffects
 serializeSE = \case
@@ -321,10 +321,10 @@ unionST t1 t2 = case (t1, t2) of
     unless (length t1s == length t2s) $ throwError $ TypeMismatch (serializeST t1) (serializeST t2)
     ts <- zipWithM unionST t1s t2s
     return $ STTuple ts
-  (STBottom, _) -> return t2 -- Bottom is the bottom of the lattice
-  (_, STBottom) -> return t1 -- Bottom is the bottom of the lattice
-  (STTop, _) -> return STTop -- Top is the top of the lattice
-  (_, STTop) -> return STTop -- Top is the top of the lattice
+  (STNever, _) -> return t2 -- Never is the bottom of the lattice
+  (_, STNever) -> return t1 -- Never is the bottom of the lattice
+  (STUnknown, _) -> return STUnknown -- Unknown is the top of the lattice
+  (_, STUnknown) -> return STUnknown -- Unknown is the top of the lattice
   _ -> throwError $ TypeMismatch (serializeST t1) (serializeST t2)
 
 unionSE :: SolvedEffects -> SolvedEffects -> TypeSolverM SolvedEffects
@@ -344,10 +344,10 @@ intersectST t1 t2 = case (t1, t2) of
     e1' <- intersectSE e1 e3 -- Contravariance
     e2' <- unionSE e2 e4
     return $ STHandler (t1', e1') (t2', e2')
-  (STBottom, _) -> return STBottom -- Bottom is the bottom of the lattice
-  (_, STBottom) -> return STBottom -- Bottom is the bottom of the lattice
-  (STTop, _) -> return t2 -- Top is the top of the lattice
-  (_, STTop) -> return t1 -- Top is the top of the lattice
+  (STNever, _) -> return STNever -- Never is the bottom of the lattice
+  (_, STNever) -> return STNever -- Never is the bottom of the lattice
+  (STUnknown, _) -> return t2 -- Unknown is the top of the lattice
+  (_, STUnknown) -> return t1 -- Unknown is the top of the lattice
   _ -> throwError $ TypeMismatch (serializeST t1) (serializeST t2)
 
 intersectSE :: SolvedEffects -> SolvedEffects -> TypeSolverM SolvedEffects
@@ -365,8 +365,8 @@ parseTBounds (ts1, ts2) = do
 
 getIntersectedTBounds :: ([] SolvedType, [] SolvedType) -> TypeSolverM (SolvedType, SolvedType)
 getIntersectedTBounds (ts1, ts2) = do
-  ts1' <- foldM unionST STBottom ts1 -- Contravariance
-  ts2' <- foldM intersectST STTop ts2 -- Covariance
+  ts1' <- foldM unionST STNever ts1 -- Contravariance
+  ts2' <- foldM intersectST STUnknown ts2 -- Covariance
   return (ts1', ts2')
 
 parseEBounds :: EffectBound -> Maybe ([] SolvedEffects, [] SolvedEffects)
@@ -467,10 +467,10 @@ isSubtypeST t1 t2 = case (t1, t2) of
     unless (length t1s == length t2s) $ throwError $ TypeMismatch (serializeST t1) (serializeST t2)
     bs <- zipWithM isSubtypeST t1s t2s
     return $ and bs
-  (STBottom, _) -> return True
-  (_, STBottom) -> return False
-  (STTop, _) -> return False
-  (_, STTop) -> return True
+  (STNever, _) -> return True
+  (_, STNever) -> return False
+  (STUnknown, _) -> return False
+  (_, STUnknown) -> return True
   _ -> throwError $ TypeMismatch (serializeST t1) (serializeST t2)
 
 isSubtypeSE :: SolvedEffects -> SolvedEffects -> TypeSolverM Bool
@@ -535,8 +535,8 @@ substituteT = \case
   UTTuple ts -> do
     ts' <- mapM substituteT ts
     return $ UTTuple ts'
-  UTBottom -> return UTBottom
-  UTTop -> return UTTop
+  UTNever -> return UTNever
+  UTUnknown -> return UTUnknown
 
 substituteE :: UnsolvedEffects -> TypeSolverM UnsolvedEffects
 substituteE = \case
@@ -581,8 +581,8 @@ addFreeConstraint (Constraints typeConstraints effectConstraints) = do
     bindedEffectVariables = Set.fromList $ map (\(v, e, _) -> v) effectConstraints
     freeTypeVariables = allTypeVariables `Set.difference` bindedTypeVariables
     freeEffectVariables = allEffectVariables `Set.difference` bindedEffectVariables
-    freeTypeConstraintsLessthan = map (,UTTop,COLessThanOrEqual) $ Set.toList freeTypeVariables
-    freeTypeConstraintsGreaterthan = map (,UTBottom,COGreaterThanOrEqual) $ Set.toList freeTypeVariables
+    freeTypeConstraintsLessthan = map (,UTUnknown,COLessThanOrEqual) $ Set.toList freeTypeVariables
+    freeTypeConstraintsGreaterthan = map (,UTNever,COGreaterThanOrEqual) $ Set.toList freeTypeVariables
     freeEffectConstraintsLessthan = map (,UEFull,COLessThanOrEqual) $ Set.toList freeEffectVariables
     freeEffectConstraintsGreaterthan = map (,UESet Set.empty,COGreaterThanOrEqual) $ Set.toList freeEffectVariables
     newConstraints =
