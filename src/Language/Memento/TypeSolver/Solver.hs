@@ -16,19 +16,29 @@ import Language.Memento.TypeSolver.Subtype
 solveConstraints :: ConstraintSet -> SolveResult
 solveConstraints cs = solve cs Map.empty
 
--- Internal solve function  
+-- Internal solve function with loop detection
 solve :: ConstraintSet -> Substitution -> SolveResult
-solve cs subst =
-  case solveStep cs subst of
-    StepSuccess newSubst remainingCs -> Success (Map.union newSubst subst)
-    StepContradiction -> Contradiction
-    StepAmbiguous branches ->
-      let results = map (`solve` subst) branches
-          successes = [s | Success s <- results]
-      in case successes of
-        [] -> Contradiction
-        [s] -> Success s
-        ss -> Ambiguous [] -- Multiple solutions, simplified representation
+solve = solveWithHistory Set.empty
+  where
+    solveWithHistory :: Set.Set ConstraintSet -> ConstraintSet -> Substitution -> SolveResult
+    solveWithHistory history cs subst =
+      if cs `Set.member` history
+      then Contradiction  -- Loop detected! Treat as unsolvable
+      else
+        let newHistory = Set.insert cs history  -- Add to history BEFORE solving
+        in case solveStep cs subst of
+          StepSuccess newSubst remainingCs ->
+            if Set.null remainingCs
+            then Success (Map.union newSubst subst)
+            else solveWithHistory newHistory remainingCs (Map.union newSubst subst)
+          StepContradiction -> Contradiction
+          StepAmbiguous branches ->
+            let results = map (\branch -> solveWithHistory newHistory branch subst) branches
+                successes = [s | Success s <- results]
+            in case successes of
+              [] -> Contradiction
+              [s] -> Success s
+              ss -> Ambiguous [] -- Multiple solutions, simplified representation
 
 -- Single solving step
 solveStep :: ConstraintSet -> Substitution -> SolveStepResult
@@ -44,7 +54,7 @@ solveStep cs subst =
           case step3_4_boundaryAndAssignment remaining of
             Left err -> StepContradiction
             Right (newSubst, remaining') ->
-              if Map.null newSubst && remaining' == remaining
+              if Map.null newSubst && Set.size remaining' == Set.size remaining
               then step5_branchStep remaining' -- No progress, try branching
               else StepSuccess newSubst remaining' -- Progress made, continue
 
@@ -61,21 +71,71 @@ step1_decompose cs =
   let decomposed = Set.unions (Set.map decomposeConstraint cs)
   in Right decomposed
 
-decomposeConstraint :: Constraint -> Set.Set Constraint
-decomposeConstraint (Subtype t1 t2) = decomposeSubtype t1 t2
+-- | decompose & check clear contradictions (nothing means contradiction)
+-- |
+-- | NOTE: these insights are based on type application == type assignment for type constructor of data type
+-- | with type synonym, some of these will be wrong.
+-- | Ex).  Generics <: t2 where t2 in type application   is no longer unknown <: t2.
+-- |       however, without type synonym, generics and t2 (type constructor) are 100% incompatible so unknown <: t2 is enough
+-- |
+-- |
+-- | CLEAR CONTRADICTIONS (contradiction)
+-- | - t1 <: t2 where t1, t2 don't contain type variable -> statically checkable
+-- | - Generics x <: Generics y   -> CONTRADICTION iff x /= y
+-- | - NOTE: Var x <: Var y is not contradiction, because these are type variables
+-- | - type application t1 <: type application t2 where t1 is incompatible with t2  -> CONTRADICTION
+-- |
+-- | REMOVABLE
+-- | - t1 <: t2 where t1, t2 don't contain type variable -> statically checkable
+-- | - Generics x <: Generics x   -> no effects
+-- | - Var x <: Var x   -> no effects
+-- |
+-- | DECOMPOSES:
+-- | - t1 <: Intersection t2
+-- |   -> t1 <: t2 for each t2 in t2
+-- | - Union t1 <: t2
+-- |   -> t1 <: t2 for each t1 in t1
+-- | MEMO: FOLLOWINGS don't contain REMAINS section
+-- | - Generics <: t2 where t2 in {literal, prim, function, unknown, never, type application}
+-- |   -> this can be decompose as unknown <: t2
+-- | - t1 <: Generics where t1 in {literal, prim, function, unknown, never, type application}
+-- |   -> same as above, to t1 <: never
+-- | - function <: non-function t2 in {literal, prim, unknown, never, type application}
+-- | - -> this can be decomposed as unknown <: t2
+-- | - non-function t1 in {literal, prim, unknown, never, type application} <: function
+-- | - -> same as above, to t1 <: never
+-- | - Type Application <: t2 where t2 in {literal, prim, unknown, never}
+-- | - -> unknown <: t2
+-- | - t1 <: Type Application where t1 in {literal, prim, unknown, never}
+-- | - -> t1 <: never
+-- |
+-- | REMAINS:
+-- | - t1 <: Union ts    -- handled by world branching
+-- | - Inter ts <: t2    -- Same as above
+-- | - Var <: t2 -- handled by bounding
+-- | - t1 <: Var -- same as above
 
-decomposeSubtype :: Type -> Type -> Set.Set Constraint
--- VS <: and(VTn) → VS <: VT_n for each n
-decomposeSubtype t1 (TIntersection ts) =
-  Set.fromList [Subtype t1 t | t <- Set.toList ts]
+decomposeConstraint :: Constraint -> Maybe (Set.Set Constraint)
+decomposeConstraint cns = case cns of
+  Subtype t1 (TIntersection ts) ->
+    Just $ Set.fromList [Subtype t1 t | t <- Set.toList ts]
+  Subtype (TUnion ts) t2 ->
+    Just $ Set.fromList [Subtype t t2 | t <- Set.toList ts]
+-- ([VS1, VS2...] -> VS3) <: ([VT1, VT2,...] -> VT3) → VT1 <: VS1, VT2 <: VS2, ... , and return type : VS3 <: VT3
+  Subtype (TFunction as1 r1) (TFunction as2 r2) -> Set.fromList $
+    [Subtype a2 a1 | (a1, a2) <- zip as1 as2] ++
+    [Subtype r1 r2]
+  -- TODO: Future work; for type synonyms, Some<number> <: Maybe<unknown> should be decomposable to number <: unknown,
+  -- but currently it's not necessary because we don't have type synonyms in the language.
+  -- NOTE: currently, type synonyms are replaced with it's definition, but in the future we may want to support recursive type synonym,
+  -- which is not replaced with concrete type.
+  -- So base1 == base2 should be modified in the some future.
+  Subtype (TApplication base1 args1) (TApplication base2 args2)
+    | base1 == base2 && length args1 == length args2 ->
+      -- For same type constructor, decompose arguments
+      Set.fromList [Subtype a1 a2 | (a1, a2) <- zip args1 args2]
+  -- Path through:
 
--- or(VSn) <: VT → VS_n <: VT for each n
-decomposeSubtype (TUnion ts) t2 =
-  Set.fromList [Subtype t t2 | t <- Set.toList ts]
-
--- (VS1 -> VS2) <: (VT1 -> VT2) → VT1 <: VS1 and VS2 <: VT2
-decomposeSubtype (TFunction a1 r1) (TFunction a2 r2) =
-  Set.fromList [Subtype a2 a1, Subtype r1 r2]
 
 -- FIXED: Type application decomposition with variance
 decomposeSubtype (TApplication base1 args1) (TApplication base2 args2)
@@ -87,47 +147,32 @@ decomposeSubtype (TApplication base1 args1) (TApplication base2 args2)
 -- Base case: no decomposition needed
 decomposeSubtype t1 t2 = Set.singleton (Subtype t1 t2)
 
--- Step 2: Contradiction check
+-- Step 2: Contradiction check - IMPROVED ALGORITHM
+-- Only check contradictions on fully concrete constraints, never with type variables
 step2_contradictionCheck :: ConstraintSet -> Either String (Set.Set Constraint, ConstraintSet)
 step2_contradictionCheck cs =
-  let (checkable, remaining) = Set.partition isCheckableConstraint cs
-      checked = Set.filter (not . isContradictory) checkable
-  in if Set.size checked == Set.size checkable
-     then Right (checked, remaining)
-     else Left "Contradiction found"
+  let (fullyConcreteConstraints, remainingConstraints) = Set.partition isFullyConcrete cs
+      contradictoryConstraints = Set.filter isDefinitelyContradictory fullyConcreteConstraints
+  in if Set.null contradictoryConstraints
+     then Right (fullyConcreteConstraints, remainingConstraints)
+     else Left $ "Contradiction found: " ++ show (Set.toList contradictoryConstraints)
+  where
+    -- A constraint is fully concrete if both sides have no variables and no generics
+    isFullyConcrete :: Constraint -> Bool
+    isFullyConcrete (Subtype t1 t2) =
+      isConcreteType t1 && isConcreteType t2
 
-isCheckableConstraint :: Constraint -> Bool
-isCheckableConstraint (Subtype t1 t2) =
-  case (t1, t2) of
-    -- Case i: both sides are concrete types
-    _ | not (containsVar t1) && not (containsVar t2) && not (containsGeneric t1) && not (containsGeneric t2) -> True
-    -- (Special case of) Case ii: x <: x
-    (TVar v1, TVar v2) | v1 == v2 -> True
-    -- FIXED: Generic type cases
-    (TGeneric n1, TGeneric n2) | n1 == n2 -> True
-    (TGeneric _, _) | not (containsVar t2) && not (containsGeneric t2) -> True
-    (_, TGeneric _) | not (containsVar t1) && not (containsGeneric t1) -> True
-    -- Case v: function vs non-function
-    (TFunction {}, _) | not (containsVar t2) && not (isFunction t2) && not (containsGeneric t2) -> True
-    (_, TFunction {}) | not (containsVar t1) && not (isFunction t1) && not (containsGeneric t1) -> True
-    _ -> False
+    isConcreteType :: Type -> Bool
+    isConcreteType t = not (containsVar t) && not (containsGeneric t)
 
-isContradictory :: Constraint -> Bool
-isContradictory (Subtype t1 t2) =
-  case (t1, t2) of
-    _ | not (containsVar t1) && not (containsVar t2) && not (containsGeneric t1) && not (containsGeneric t2) -> not (isSubtype t1 t2)
-    (TVar v1, TVar v2) | v1 == v2 -> False
-    -- FIXED: Enhanced generic type contradiction checking
-    (TGeneric name1, TGeneric name2) | name1 == name2 -> False  -- Same generic, no contradiction
-    (TGeneric name1, TGeneric name2) | name1 /= name2 -> True   -- Different generics can contradict
-    (TGeneric _, _) | not (containsVar t2) && not (containsGeneric t2) -> False  -- Generic can be any concrete type
-    (_, TGeneric _) | not (containsVar t1) && not (containsGeneric t1) -> False  -- Any concrete type can be subtype of generic
-    -- Function type contradictions with generic awareness
-    (TFunction {}, _) | not (containsVar t2) && not (isFunction t2) && not (containsGeneric t2) ->
-      not (isSubtype t1 t2)
-    (_, TFunction {}) | not (containsVar t1) && not (isFunction t1) && not (containsGeneric t1) ->
-      not (isSubtype t1 t2)
-    _ -> False
+    -- Only call isSubtype on definitely concrete constraints
+    isDefinitelyContradictory :: Constraint -> Bool
+    isDefinitelyContradictory (Subtype t1 t2) =
+      not (isSubtype t1 t2)  -- Safe to call since we checked isFullyConcrete
+
+-- REMOVED: isCheckableConstraint - replaced by improved algorithm
+
+-- REMOVED: Old unused contradiction checking functions
 
 -- Step 3 & 4: Boundary calculation and assignment
 step3_4_boundaryAndAssignment :: ConstraintSet -> Either String (Substitution, ConstraintSet)
@@ -203,6 +248,11 @@ isFunction :: Type -> Bool
 isFunction (TFunction _ _) = True
 isFunction _ = False
 
+-- Check if a type is a type application
+isApplication :: Type -> Bool
+isApplication (TApplication _ _) = True
+isApplication _ = False
+
 -- FIXED: Check if a type contains generic types
 containsGeneric :: Type -> Bool
 containsGeneric (TGeneric _) = True
@@ -228,6 +278,18 @@ unifyBounds (Bounds lowers uppers) =
     -- ([t], []) -> Just t  -- UNSOUND: could assign any supertype
     -- ([], [t]) -> Just t  -- UNSOUND: could assign any subtype
 
+    -- Special case: if we have exactly one concrete (non-variable) lower bound
+    -- and all upper bounds are type variables, we can safely assign the concrete type
+    -- BUT: generalize literal types to their base types for better polymorphic inference
+    _ | length concreteLowers == 1 && all isTypeVar uppers ->
+      Just (generalizeToBaseType (head concreteLowers))
+
+    -- Special case: if we have only concrete lower bounds and no upper bounds,
+    -- we can pick the most general (for now, just pick the first)
+    -- BUT: generalize literal types to their base types
+    _ | not (null concreteLowers) && null uppers ->
+      Just (generalizeToBaseType (head concreteLowers))
+
     -- Find types that appear in BOTH lower and upper bounds
     _ -> case findCommonTypes lowers uppers of
            [] -> Nothing
@@ -239,11 +301,28 @@ unifyBounds (Bounds lowers uppers) =
     findCommonTypes :: [Type] -> [Type] -> [Type]
     findCommonTypes ls us = [t | t <- ls, t `elem` us, not (containsVar t), canUnifyWithGeneric t]
 
+    -- Get concrete (non-variable) types from lower bounds
+    concreteLowers = [t | t <- lowers, not (containsVar t), canUnifyWithGeneric t]
+
+    -- Check if a type is a type variable
+    isTypeVar (TVar _) = True
+    isTypeVar _ = False
+
+    -- Generalize literal types to their base types for polymorphic inference
+    generalizeToBaseType :: Type -> Type
+    generalizeToBaseType (TLiteral (LNumber _)) = TNumber
+    generalizeToBaseType (TLiteral (LBool _)) = TBool
+    generalizeToBaseType (TLiteral (LString _)) = TString
+    generalizeToBaseType t = t
+
 -- Step 5: Branch splitting (for step-by-step solving)
 step5_branchStep :: ConstraintSet -> SolveStepResult
 step5_branchStep cs =
   case findBranchableConstraint cs of
-    Nothing -> StepSuccess Map.empty Set.empty -- No more constraints to solve
+    Nothing ->
+      if Set.null cs
+      then StepSuccess Map.empty Set.empty -- No more constraints to solve
+      else StepSuccess Map.empty cs -- Can't make progress, but constraints remain
     Just (c, remaining) ->
       let branches = branchConstraint c
       in StepAmbiguous (map (`Set.insert` remaining) branches)

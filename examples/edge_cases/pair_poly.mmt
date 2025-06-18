@@ -1,0 +1,3 @@
+// Test two-parameter polymorphic function
+val pair<A, B> : (x : A, y : B) => A := (x : A, y : B) => x;
+val test : number := pair(42, "hello");

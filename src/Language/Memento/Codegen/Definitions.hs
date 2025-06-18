@@ -10,7 +10,7 @@ import Language.Memento.Codegen.Expressions (genExpr)
 import Language.Memento.Data.HFix (unHFix)
 import Language.Memento.Data.HProduct ((:*:) (..))
 import Language.Memento.Syntax (AST, unMType)
-import Language.Memento.Syntax.MType (MType (TFunction, TVar))
+import Language.Memento.Syntax.MType (MType (TFunction, TVar, TApplication))
 import Language.Memento.Syntax.Tag (KExpr, KType, KVariable)
 
 type DefinitionResult = (List (Text, Text)) -- (argName, argValue) -> const argName = argValue
@@ -53,3 +53,32 @@ extractData scrutinee numArgs =
 
 genValDefinition :: AST KVariable -> AST KType -> AST KExpr -> DefinitionResult
 genValDefinition astV _ astE = [(genVariable astV, genExpr astE)]
+
+{-
+New separated constructor/type syntax:
+
+data SomeNum : (value : number) => Value
+
+Generates:
+const _SYM_Value = Symbol();
+const SomeNum = (...args) => [_SYM_Value, ...args];
+-}
+
+genDataDefinitionSeparated :: AST KVariable -> AST KType -> DefinitionResult
+genDataDefinitionSeparated constructorVar returnType = 
+  let returnTypeName = extractTypeName returnType
+      symName = "_SYM_" <> returnTypeName
+      symDef = (symName, "Symbol()")
+      constructorName = genVariable constructorVar
+      constructorDef = (constructorName, "(...args) => [" <> symName <> ", ...args]")
+   in [symDef, constructorDef]
+
+-- Extract the type name from a return type AST
+-- For function types like (value : number) => Type, extract the return type (Type)
+extractTypeName :: AST KType -> Text
+extractTypeName astT = case unHFix astT of
+  _meta :*: stx -> case unMType stx of
+    TVar v -> genVariable v
+    TApplication base _args -> extractTypeName base
+    TFunction _params returnType -> extractTypeName returnType
+    _ -> error ("extractTypeName: Unsupported return type: " <> show (unMType stx))

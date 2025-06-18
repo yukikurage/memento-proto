@@ -1,0 +1,11 @@
+// Test new data definition syntax - separating constructor and type names
+data Cons : (x : number) => Typ;
+
+// Constructor polymorphism: constructor has type parameters
+data Pair<A, B> : (a : A) => Container<B>;
+
+// Type polymorphism: return type has concrete type parameters
+data Some : (x : string) => Option<number>;
+
+// Combined: both constructor and return type are polymorphic
+data Wrapped<T> : (wrapped : T) => Wrapper<T>;

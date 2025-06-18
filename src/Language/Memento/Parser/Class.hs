@@ -18,6 +18,7 @@ class CoreParser m where
   parseParens :: m a -> m a
   parseBraces :: m a -> m a
   parseBrackets :: m a -> m a
+  parseAngleBrackets :: m a -> m a  -- For type parameters <T, U, V>
   parseReservedWord :: Text -> m ()
   parseIdentifier :: m Text
 

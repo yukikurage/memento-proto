@@ -53,6 +53,8 @@ instance CoreParser Parser where
   parseBraces = Core.parseBraces
   parseBrackets :: Parser a -> Parser a
   parseBrackets = Core.parseBrackets
+  parseAngleBrackets :: Parser a -> Parser a
+  parseAngleBrackets = Core.parseAngleBrackets
   parseReservedWord :: Text -> Parser ()
   parseReservedWord = Core.parseReservedWord
   parseIdentifier :: Parser Text

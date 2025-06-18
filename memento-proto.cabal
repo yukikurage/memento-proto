@@ -73,7 +73,6 @@ library
     Language.Memento.TypeChecker.Types
     Language.Memento.TypeSolver
     Language.Memento.TypeSolver.ConstraintGen
-    Language.Memento.TypeSolver.Demo
     Language.Memento.TypeSolver.Normalize
     Language.Memento.TypeSolver.Solver
     Language.Memento.TypeSolver.Subtype

@@ -74,3 +74,9 @@ noMetadata ast = HFix $ hmap noMetadata $ unMetadata $ unHFix ast
  where
   unMetadata :: forall f a. (Metadata :*: Syntax) f a -> Syntax f a
   unMetadata (meta :*: stx) = stx
+
+-- Extract syntax from AST, handling the metadata
+extractSyntax :: AST a -> Syntax AST a
+extractSyntax ast =
+  case unHFix ast of
+    (metadata :*: syntax) -> syntax

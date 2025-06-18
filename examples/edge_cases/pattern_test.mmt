@@ -1,0 +1,7 @@
+// Test zero-argument constructor pattern matching
+data A : () => Type;
+
+val test : (x : Type) => number := (x : Type) =>
+  switch (x) [
+    (A() : Type) => 1
+  ];

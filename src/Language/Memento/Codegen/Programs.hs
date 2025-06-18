@@ -18,16 +18,19 @@ import Language.Memento.Data.HFix (unHFix)
 import Language.Memento.Data.HProduct ((:*:) (..))
 
 import Language.Memento.Codegen.Core (genConstDefRaw)
-import Language.Memento.Codegen.Definitions (genDataDefinition, genValDefinition)
+import Language.Memento.Codegen.Definitions (genDataDefinition, genDataDefinitionSeparated, genValDefinition)
 
 import Language.Memento.Syntax (
   AST,
   unDefinition,
   unProgram,
+  unMType,
  )
 import Language.Memento.Syntax.Definition (Definition (..))
 import Language.Memento.Syntax.Program (Program (..))
-import Language.Memento.Syntax.Tag (KDefinition, KProgram)
+import Language.Memento.Syntax.Tag (KDefinition, KProgram, KType)
+import Language.Memento.Syntax.MType (MType (TFunction))
+import Language.Memento.Data.HFix (HFix (..))
 
 -------------------------------------------------------------------------------
 
@@ -64,8 +67,8 @@ generateDefinition astD =
           let bindings = genValDefinition var typ expr -- [(name, expr)]
            in T.unlines $ map (uncurry genConstDefRaw) bindings
         -- Data definition (emit its constructor wrappers)
-        DataDef var _params typ ->  -- Ignore type parameters for now
-          let bindings = genDataDefinition var typ -- [(name, expr)]
+        DataDef var _params ctorArgs returnType ->  -- New 4-argument structure
+          let bindings = genDataDefinitionSeparated var returnType
            in T.unlines $ map (uncurry genConstDefRaw) bindings
         TypeDef var _params typ -> ""  -- Ignore type parameters for now
 
@@ -87,7 +90,8 @@ generateConstructorWrapperFunctions defs =
             case unHFix astD of
               _meta :*: stx ->
                 case unDefinition stx of
-                  DataDef var _params typ -> genDataDefinition var typ  -- Ignore type parameters for now
+                  DataDef var _params ctorArgs returnType -> 
+                    genDataDefinitionSeparated var returnType
                   _ -> []
         )
         defs
@@ -129,3 +133,4 @@ generateProgram astP =
               , "// Generated value definitions"
               , valPart
               ]
+

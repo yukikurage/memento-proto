@@ -10,6 +10,7 @@ import Data.Text (Text)
 import Language.Memento.Data.HCoproduct (Injective (hInject))
 import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax.MType (MType (TApplication, TBool, TFunction, TInt, TIntersection, TLiteral, TNever, TNumber, TString, TUnion, TUnknown, TVar))
+import Language.Memento.Syntax.Variable (Variable(Var))
 import Language.Memento.Syntax.Tag (KType)
 import Text.Megaparsec (MonadParsec (try), choice, getSourcePos, many, sepBy, (<?>))
 
@@ -61,8 +62,9 @@ parseTypeFunction ::
 parseTypeFunction =
   ( PClass.parseFix @h $ do
       _ <- getSourcePos -- fetch position for possible future use
-      -- Parse argument types inside parentheses
-      args <- PClass.parseParens $ sepBy ((,) <$> PClass.parseVariable <* PClass.parseSymbol ":" <*> parseTypeExpr @h) (PClass.parseSymbol ",")
+      -- Parse argument types inside parentheses - with explicit zero-argument handling
+      args <- PClass.parseParens $ 
+        (sepBy ((,) <$> PClass.parseVariable <* PClass.parseSymbol ":" <*> parseTypeExpr @h) (PClass.parseSymbol ","))
       PClass.parseSymbol "=>"
       ret <- parseTypeExpr @h
       return $ hInject $ TFunction args ret
@@ -182,10 +184,8 @@ parseTypeApplication =
       -- Parse the base type (as a type variable for now)
       baseVar <- PClass.parseVariable
       
-      -- Parse the type arguments <T1, T2, ...>
-      PClass.parseSymbol "<"
-      args <- sepBy (parseTypeExpr @h) (PClass.parseSymbol ",")
-      PClass.parseSymbol ">"
+      -- Parse the type arguments <T1, T2, ...> using proper angle bracket parser
+      args <- PClass.parseAngleBrackets $ sepBy (parseTypeExpr @h) (PClass.parseSymbol ",")
       
       -- Create base type as TVar wrapped in Fix
       baseType <- PClass.parseFix @h $ return $ hInject $ TVar baseVar

@@ -42,6 +42,10 @@ parseBrackets = between (L.symbol sc "[") (L.symbol sc "]")
 parseBraces :: (MonadParsec s Text m) => m a -> m a
 parseBraces = between (L.symbol sc "{") (L.symbol sc "}")
 
+-- | 角度括弧で囲まれた式 (型パラメータ用)
+parseAngleBrackets :: (MonadParsec s Text m) => m a -> m a
+parseAngleBrackets = between (L.symbol sc "<") (L.symbol sc ">")
+
 -- | 予約語のリスト
 reservedWords :: [Text]
 reservedWords = ["if", "then", "else", "true", "false", "number", "bool", "val", "with", "data", "branch", "effect", "handle", "let"]

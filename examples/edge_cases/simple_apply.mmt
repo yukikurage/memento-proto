@@ -1,0 +1,5 @@
+// Simple function application edge case
+val inc : (x : number) => number := (x : number) => x + 1;
+val apply : (f : (x : number) => number, x : number) => number := 
+  (f : (x : number) => number, x : number) => f(x);
+val test : number := apply(inc, 5);
