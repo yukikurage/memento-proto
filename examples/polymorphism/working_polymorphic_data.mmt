@@ -1,28 +1,18 @@
-// Polymorphic data creation (pattern matching not yet supported)
-// This demonstrates that polymorphic data creation works, but 
-// pattern matching with polymorphic data has existential type issues
+// Polymorphic data pattern matching now works!
+// Fixed the existential type variable escape issue
 
-data Box [Box<T> : (value : T) => Box<T>];
+data Box [
+  MkBox<T> : (value : T) => Box<T>
+];
 
-// These work fine - polymorphic data creation
-val box_number : Box<number> := Box(42);
-val box_string : Box<string> := Box("hello");
-
-// TODO: Pattern matching with polymorphic data causes existential type errors
-// This would be the goal but doesn't work yet:
-// val unbox<T> : (box : Box<T>) => T := (box : Box<T>) =>
-//   switch (box) [
-//     (Box(value) : Box<T>) => value
-//   ];
-
-// Simple non-polymorphic example that works
-data SimpleBox [MkBox : (value : number) => SimpleBox];
-
-val simple_box : SimpleBox := MkBox(42);
-
-val extract_simple : (box : SimpleBox) => number := (box : SimpleBox) =>
+// This now works! Polymorphic pattern matching with proper scope-aware instantiation
+val unbox<T> : (box : Box<T>) => T := (box : Box<T>) =>
   switch (box) [
-    (MkBox(value) : SimpleBox) => value
+    (MkBox(value) : Box<T>) => value
   ];
 
-val result : number := extract_simple(simple_box);
+// These work fine - polymorphic data creation
+val box_number : Box<number> := MkBox(42);
+val box_string : Box<string> := MkBox("hello");
+
+val main : (tmp : number) => number := (tmp : number) => unbox(box_number);

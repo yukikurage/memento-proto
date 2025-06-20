@@ -58,8 +58,7 @@ genLambda ps e =
 genApply :: AST KExpr -> List (AST KExpr) -> Text
 genApply e es = genExpr e <> "(" <> T.intercalate ", " (map genExpr es) <> ")"
 
-genLet ::
-  AST KPattern -> AST KType -> AST KExpr -> Int -> Text
+genLet :: AST KPattern -> AST KType -> AST KExpr -> Int -> Text
 genLet p t e n =
   let
     -- 一旦 const _ARG_n_ = e としてから、パターンでのスプリットを導入

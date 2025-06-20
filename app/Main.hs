@@ -7,7 +7,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
 import Language.Memento.Parser (parseProgramText)
-import Language.Memento.TypeSolver (typeCheckProgram, typeCheckAST)
+import Language.Memento.TypeSolver (typeCheckAST, typeCheckProgram)
 
 -- import Language.Memento.TypeChecker (typeCheckProgram)
 import System.Directory (createDirectoryIfMissing)
@@ -25,7 +25,7 @@ main = do
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
           case typeCheckAST program of -- Real AST type checking
-            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+            Left err -> hPutStrLn stderr $ "Type error: " ++ err
             Right typeEnv -> do
               putStrLn "Type checking successful"
               putStrLn $ "Type environment: " ++ show typeEnv
@@ -44,7 +44,7 @@ main = do
         Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
         Right program -> do
           case typeCheckAST program of -- Real AST type checking
-            Left err -> hPutStrLn stderr $ "Type error: " ++ show err
+            Left err -> hPutStrLn stderr $ "Type error: " ++ err
             Right typeEnv -> do
               putStrLn "Type checking successful"
               putStrLn $ "Type environment: " ++ show typeEnv

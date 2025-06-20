@@ -1,0 +1,11 @@
+val f : (x : 42) => number := (x : 42) => x + 1;
+
+val g : (x : "hello") => string := (x : "hello") => "world";
+
+val h : (x : true) => false := (x : true) => false;
+
+val x : false := h(true);
+
+val y : number := f(42);
+
+val z : string := g("hello");

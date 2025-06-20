@@ -1,0 +1,30 @@
+data Consume [
+  mkConsume<U, T> : (original : U, consumer : (value : U) => T) => Consume<T>
+];
+
+/*
+val init<T> : (original : T) => Consume<T> := (original : T) =>
+  mkConsume(original, (value : T) => value);
+*/
+
+val map<T, U1> : (consume : Consume<T>, f : (value : T) => U1) => Consume<U1> :=
+  (consume : Consume<T>, f : (value : T) => U1) =>
+    switch (consume) [
+      (mkConsume(original, consumer) : Consume<T>) => mkConsume(original, (value : T) => f(consumer(value)))
+    ];
+
+/*
+val consume<T> : (consume : Consume<T>) => T :=
+  (consume : Consume<T>) =>
+    switch (consume) [
+      (mkConsume(original, consumer) : Consume<T>) => consumer(original)
+    ];
+
+val main : (tmp : number) => bool :=
+  (tmp : number) => {
+    let c1 : Consume<number> := init(tmp);
+    let c2 : Consume<number> := map(c1, (value : number) => value + 1);
+    let c3 : Consume<bool> := map(c2, (value : number) => value == 42);
+    consume(c3)
+  };
+*/

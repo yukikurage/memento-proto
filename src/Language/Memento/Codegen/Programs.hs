@@ -18,7 +18,7 @@ import Language.Memento.Data.HFix (unHFix)
 import Language.Memento.Data.HProduct ((:*:) (..))
 
 import Language.Memento.Codegen.Core (genConstDefRaw)
-import Language.Memento.Codegen.Definitions (genDataDefinition, genDataDefinitionSeparated, genMultiDataDefinition, genValDefinition)
+import Language.Memento.Codegen.Definitions (genDataDefinitionSeparated, genMultiDataDefinition, genValDefinition)
 
 import Language.Memento.Syntax (
   AST,

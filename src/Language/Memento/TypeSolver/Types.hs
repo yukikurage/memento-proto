@@ -1,9 +1,11 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 
 module Language.Memento.TypeSolver.Types where
 
+import Data.List
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -35,6 +37,26 @@ data Literal
 
 newtype TypeVar = TypeVar Text
   deriving (Eq, Ord, Show)
+
+formatType :: Type -> String
+formatType TNumber = "number"
+formatType TBool = "boolean"
+formatType TString = "string"
+formatType TNever = "never"
+formatType TUnknown = "unknown"
+formatType (TLiteral (LNumber n)) = show n
+formatType (TLiteral (LBool b)) = show b
+formatType (TLiteral (LString s)) = "\"" ++ T.unpack s ++ "\""
+formatType (TVar (TypeVar name)) = T.unpack name
+formatType (TFunction args ret) =
+  "(" ++ intercalate ", " (map formatType args) ++ " => " ++ formatType ret ++ ")"
+formatType (TUnion ts) =
+  "(" ++ intercalate " | " (map formatType (Set.toList ts)) ++ ")"
+formatType (TIntersection ts) =
+  "(" ++ intercalate " & " (map formatType (Set.toList ts)) ++ ")"
+formatType (TGeneric name) = T.unpack name
+formatType (TApplication base args) =
+  T.unpack base ++ "<" ++ intercalate ", " (map formatType args) ++ ">"
 
 -- Type schemes for polymorphic types (forall quantification)
 data TypeScheme = TypeScheme [T.Text] Type -- forall [a1, a2, ...] . Type
@@ -127,6 +149,14 @@ analyzeParameterVariance varsMap paramName typeExpr = case typeExpr of
 data Constraint = Subtype Type Type
   deriving (Eq, Ord, Show)
 
+-- Format type errors
+formatConstraintSet :: ConstraintSet -> String
+formatConstraintSet constraints =
+  "All Constraints:\n" ++ unlines (map formatConstraint $ Set.toList constraints)
+ where
+  formatConstraint (Subtype t1 t2) =
+    "  " ++ formatType t1 ++ " <: " ++ formatType t2
+
 -- Constraint set for solving
 type ConstraintSet = Set.Set Constraint
 
@@ -164,6 +194,20 @@ containsVar (TUnion ts) = any containsVar (Set.toList ts)
 containsVar (TIntersection ts) = any containsVar (Set.toList ts)
 containsVar (TGeneric _) = False -- Generic parameters are not unification variables
 containsVar (TApplication _ args) = any containsVar args
+
+containsGeneric :: Type -> Bool
+containsGeneric TNumber = False
+containsGeneric TBool = False
+containsGeneric TString = False
+containsGeneric TNever = False
+containsGeneric TUnknown = False
+containsGeneric (TLiteral _) = False
+containsGeneric (TVar _) = False
+containsGeneric (TFunction args ret) = any containsGeneric args || containsGeneric ret
+containsGeneric (TUnion ts) = any containsGeneric (Set.toList ts)
+containsGeneric (TIntersection ts) = any containsGeneric (Set.toList ts)
+containsGeneric (TGeneric _) = True -- This is what we're looking for
+containsGeneric (TApplication _ args) = any containsGeneric args
 
 -- Get all type variables in a type
 typeVars :: Type -> Set.Set TypeVar
