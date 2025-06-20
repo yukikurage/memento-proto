@@ -187,9 +187,7 @@ parseTypeApplication =
       -- Parse the type arguments <T1, T2, ...> using proper angle bracket parser
       args <- PClass.parseAngleBrackets $ sepBy (parseTypeExpr @h) (PClass.parseSymbol ",")
       
-      -- Create base type as TVar wrapped in Fix
-      baseType <- PClass.parseFix @h $ return $ hInject $ TVar baseVar
-      return $ hInject $ TApplication baseType args
+      return $ hInject $ TApplication baseVar args
   )
     <?> "type application"
 

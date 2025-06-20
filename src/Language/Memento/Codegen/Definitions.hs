@@ -12,6 +12,7 @@ import Language.Memento.Data.HProduct ((:*:) (..))
 import Language.Memento.Syntax (AST, unMType)
 import Language.Memento.Syntax.MType (MType (TFunction, TVar, TApplication))
 import Language.Memento.Syntax.Tag (KExpr, KType, KVariable)
+import Language.Memento.Syntax.Definition (ConstructorDef (..))
 
 type DefinitionResult = (List (Text, Text)) -- (argName, argValue) -> const argName = argValue
 
@@ -82,3 +83,32 @@ extractTypeName astT = case unHFix astT of
     TApplication base _args -> extractTypeName base
     TFunction _params returnType -> extractTypeName returnType
     _ -> error ("extractTypeName: Unsupported return type: " <> show (unMType stx))
+
+-- Generate JavaScript for multi-constructor data definition
+-- data Maybe [Some<T> : (x : T) => Maybe<T>, None<T> : () => Maybe<T>];
+genMultiDataDefinition :: List (ConstructorDef (AST)) -> DefinitionResult
+genMultiDataDefinition constructors = 
+  let 
+    -- Group constructors by their return type to create shared symbols
+    constructorBindings = concatMap genSingleConstructor constructors
+    
+    -- Extract unique return type names and create symbols for them
+    returnTypeNames = map (\constructor -> extractTypeName (cdType constructor)) constructors
+    uniqueReturnTypes = removeDuplicates returnTypeNames
+    symbolBindings = [(symName, "Symbol()") | typeName <- uniqueReturnTypes, let symName = "_SYM_" <> typeName]
+  in
+    symbolBindings ++ constructorBindings
+
+-- Generate JavaScript for a single constructor
+genSingleConstructor :: ConstructorDef (AST) -> DefinitionResult
+genSingleConstructor (ConstructorDef { cdName = constructorAst, cdType = constructorTypeAst }) = 
+  let returnTypeName = extractTypeName constructorTypeAst
+      symName = "_SYM_" <> returnTypeName
+      constructorName = genVariable constructorAst
+      constructorDef = (constructorName, "(...args) => [" <> symName <> ", ...args]")
+  in [constructorDef]
+
+-- Remove duplicates from a list
+removeDuplicates :: Eq a => [a] -> [a]
+removeDuplicates [] = []
+removeDuplicates (x:xs) = x : removeDuplicates (filter (/= x) xs)

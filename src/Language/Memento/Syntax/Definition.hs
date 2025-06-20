@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Language.Memento.Syntax.Definition where
 
@@ -10,6 +11,17 @@ import GHC.Base (List)
 import Language.Memento.Data.HFunctor (HFunctor (hmap))
 import Language.Memento.Syntax.Tag (KDefinition, KExpr, KType, KVariable)
 
+-- Individual constructor definition for multi-constructor data types
+data ConstructorDef f = ConstructorDef
+  { cdName :: f KVariable           -- Constructor name (e.g., Some)
+  , cdTypeParams :: List (f KVariable)  -- Constructor generics (e.g., [T])
+  , cdType :: f KType               -- Constructor type (e.g., (x : T) => Maybe<T>)
+  }
+
+deriving instance (Show (f KVariable), Show (f KType)) => Show (ConstructorDef f)
+deriving instance (Eq (f KVariable), Eq (f KType)) => Eq (ConstructorDef f)
+deriving instance (Ord (f KVariable), Ord (f KType)) => Ord (ConstructorDef f)
+
 data Definition f a where
   ValDef ::
     f KVariable ->           -- Variable name
@@ -17,17 +29,11 @@ data Definition f a where
     f KType ->               -- Type annotation
     f KExpr ->               -- Expression
     Definition f KDefinition
-  -- New data definition syntax separates constructor and type names:
-  -- data Cons : (x : number) => Typ              -- Basic
-  -- data Cons<T> : (x : T) => Typ                -- Constructor polymorphism
-  -- data Cons : (x : number) => Typ<string>      -- Type polymorphism
-  -- data ConsSome<T> : (x : T) => Some<T>        -- Combined
+  -- Multi-constructor data definition syntax:
+  -- data Maybe [Some<T> : (x : T) => Maybe<T>, None<T> : () => Maybe<T>];
   DataDef ::
-    f KVariable ->           -- Constructor name
-    List (f KVariable) ->    -- Constructor type parameters (e.g., [T, U])
-    List (f KType) ->        -- Constructor arguments type
-    f KVariable ->           -- Type Constructor name
-    List (f KType) ->        -- Type parameters for the type constructor
+    f KVariable ->             -- Data type name (e.g., Maybe)
+    List (ConstructorDef f) -> -- List of constructors
     Definition f KDefinition
   TypeDef ::
     f KVariable ->           -- Type alias name
@@ -41,6 +47,7 @@ deriving instance (Ord (f KVariable), Ord (f KType), Ord (f KExpr)) => Ord (Defi
 
 instance HFunctor Definition where
   hmap f (ValDef v params t e) = ValDef (f v) (map f params) (f t) (f e)
-  hmap f (DataDef c ctorParams ctorArgs returnType typeParams) =
-    DataDef (f c) (map f ctorParams) (map f ctorArgs) (f returnType) (map f typeParams)
+  hmap f (DataDef dataName constructors) =
+    DataDef (f dataName) (map (\(ConstructorDef name params typ) ->
+      ConstructorDef (f name) (map f params) (f typ)) constructors)
   hmap f (TypeDef v params t) = TypeDef (f v) (map f params) (f t)

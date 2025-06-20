@@ -22,81 +22,69 @@ isSubtype' _ _ TUnknown = True
 isSubtype' _ TNever _ = True
 -- Reflexivity
 isSubtype' _ t1 t2 | t1 == t2 = True
-
 -- Base types
 isSubtype' _ TNumber TNumber = True
 isSubtype' _ TBool TBool = True
 isSubtype' _ TString TString = True
-
--- Constructor types (only equal constructors are subtypes)
-isSubtype' _ (TConstructor name1) (TConstructor name2) = name1 == name2
-
 -- Literal types
 isSubtype' _ (TLiteral (LNumber _)) TNumber = True
 isSubtype' _ (TLiteral (LBool _)) TBool = True
 isSubtype' _ (TLiteral (LString _)) TString = True
-
+-- Decomposition for Boolean
+isSubtype' variances TBool t2 = isSubtype' variances (TLiteral $ LBool True) t2 && isSubtype' variances (TLiteral $ LBool False) t2
 -- Function types (contravariant in argument, covariant in result)
 isSubtype' variances (TFunction args1 r1) (TFunction args2 r2) =
-  length args1 == length args2 &&
-  all (uncurry (flip (isSubtype' variances))) (zip args1 args2) && -- contravariant in arguments
-  isSubtype' variances r1 r2 -- covariant in result
+  length args1 == length args2
+    && all (uncurry (flip (isSubtype' variances))) (zip args1 args2)
+    && isSubtype' variances r1 r2 -- contravariant in arguments
+    -- covariant in result
 
 -- Union types
-isSubtype' variances t1 (TUnion ts) = any (isSubtype' variances t1) (Set.toList ts)
 isSubtype' variances (TUnion ts) t2 = all (\t -> isSubtype' variances t t2) (Set.toList ts)
+isSubtype' variances t1 (TUnion ts) = any (isSubtype' variances t1) (Set.toList ts) -- NOTE: Possible to have false-positives here
 
 -- Intersection types
 isSubtype' variances t1 (TIntersection ts) = all (isSubtype' variances t1) (Set.toList ts)
-isSubtype' variances (TIntersection ts) t2 = any (\t -> isSubtype' variances t t2) (Set.toList ts)
+isSubtype' variances (TIntersection ts) t2 = any (\t -> isSubtype' variances t t2) (Set.toList ts) -- NOTE: Possible to have false-positives here
 
 -- Generic types (polymorphic type parameters)
 isSubtype' _ (TGeneric name1) (TGeneric name2) = name1 == name2
+isSubtype' _ (TGeneric _) t2 = t2 == TUnknown -- Generic types are subtypes of unknown (but not vice versa)
+isSubtype' _ t1 (TGeneric _) = t1 == TNever -- Generic types are supertypes of never (but not vice versa)
 
 -- Type application with variance-aware subtyping!
-isSubtype' variances (TApplication base1 args1) (TApplication base2 args2) =
-  -- Base types must be subtypes
-  isSubtype' variances base1 base2 &&
-  -- Must have same number of arguments
-  length args1 == length args2 &&
-  -- Check arguments according to their variance
-  checkArgumentVariances variances base1 args1 args2
-  where
-    checkArgumentVariances :: TypeConstructorVariances -> Type -> [Type] -> [Type] -> Bool
-    checkArgumentVariances varMap baseType args1 args2 =
-      case extractConstructorName baseType of
-        Nothing ->
-          -- No variance info available, fall back to invariant (conservative)
-          all (uncurry isEquivalent') (zip args1 args2)
-        Just constructorName ->
-          case Map.lookup constructorName varMap of
-            Nothing ->
-              -- No variance info for this constructor, fall back to invariant
-              all (uncurry isEquivalent') (zip args1 args2)
-            Just varianceMap ->
-              -- Use variance information to check arguments
-              checkArgumentsWithVariance varMap varianceMap args1 args2 0
+isSubtype' varMap (TApplication typeConsName1 args1) (TApplication typeConsName2 args2)
+  | typeConsName1 /= typeConsName2 =
+      -- Base types must match exactly for application subtyping
+      False
+  | otherwise =
+      -- Must have same number of arguments
+      length args1 == length args2
+        &&
+        -- Check arguments according to their variance
+        checkArgumentVariances typeConsName1 args1 args2
+ where
+  checkArgumentVariances :: T.Text -> [Type] -> [Type] -> Bool
+  checkArgumentVariances typeConsName args1 args2 =
+    case Map.lookup typeConsName varMap of
+      Nothing -> error $ "No variance information for type constructor: " ++ T.unpack typeConsName
+      Just variances ->
+        -- Use variance information to check arguments
+        checkArgumentsWithVariance variances args1 args2
 
-    -- Helper to extract constructor name from type
-    extractConstructorName :: Type -> Maybe T.Text
-    extractConstructorName (TConstructor name) = Just name
-    extractConstructorName (TVar (TypeVar name)) = Just name  -- Type variables can represent constructors
-    extractConstructorName _ = Nothing
-
-    -- Check arguments using variance information
-    checkArgumentsWithVariance :: TypeConstructorVariances -> [Variance] -> [Type] -> [Type] -> Int -> Bool
-    checkArgumentsWithVariance _ _ [] [] _ = True
-    checkArgumentsWithVariance varMap (variance:variances) (arg1:args1) (arg2:args2) index =
-      let
-          -- Check this argument according to its variance
-          argCheck = case variance of
-            Covariant -> isSubtype' varMap arg1 arg2
-            Contravariant -> isSubtype' varMap arg2 arg1  -- Flipped!
-            Invariant -> isEquivalent' arg1 arg2
-      in argCheck && checkArgumentsWithVariance varMap variances args1 args2 (index + 1)
-
-    -- Helper for type equivalence (both directions subtyping)
-    isEquivalent' t1 t2 = isSubtype' variances t1 t2 && isSubtype' variances t2 t1
+  -- Check arguments using variance information
+  checkArgumentsWithVariance :: [Variance] -> [Type] -> [Type] -> Bool
+  checkArgumentsWithVariance _ [] [] = True
+  checkArgumentsWithVariance (variance : variances) (arg1 : args1) (arg2 : args2) =
+    let
+      -- Check this argument according to its variance
+      argCheck = case variance of
+        Covariant -> isSubtype' varMap arg1 arg2
+        Contravariant -> isSubtype' varMap arg2 arg1 -- Flipped!
+        Invariant -> isEquivalent' varMap arg1 arg2
+        Bivariant -> isSubtype' varMap arg1 arg2 || isSubtype' varMap arg2 arg1
+     in
+      argCheck && checkArgumentsWithVariance variances args1 args2
 
 -- Default case
 isSubtype' _ _ _ = False
@@ -104,3 +92,6 @@ isSubtype' _ _ _ = False
 -- Check if two types are equivalent
 isEquivalent :: Type -> Type -> Bool
 isEquivalent t1 t2 = isSubtype t1 t2 && isSubtype t2 t1
+
+isEquivalent' :: TypeConstructorVariances -> Type -> Type -> Bool
+isEquivalent' variances t1 t2 = isSubtype' variances t1 t2 && isSubtype' variances t2 t1

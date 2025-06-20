@@ -241,9 +241,14 @@ convertMType ast =
       return $ mkIntersection convertedTypes
     SMType.TApplication baseAst argAsts -> do
       -- Handle type applications like List<T>, Map<K,V>
-      baseType <- convertMType baseAst
+      let SVariable.Var baseName = unVariable (extractSyntax baseAst)
       argTypes <- mapM convertMType argAsts
-      return $ TApplication baseType argTypes
+      return $ TApplication baseName argTypes
+    SMType.TLiteralApplication ctorAst argAsts -> do
+      -- Handle literal applications like Some(1), Some(number, 2)
+      let SVariable.Var ctorName = unVariable (extractSyntax ctorAst)
+      argTypes <- mapM convertMType argAsts
+      return $ TLiteralApplication ctorName argTypes
 
 -- Convert literal to solver type
 convertLiteral :: AST KLiteral -> Type
@@ -496,7 +501,8 @@ processDataDeclaration constructorName typeParams paramNames ctorArgsType return
 extractBaseTypeName :: Type -> Maybe T.Text
 extractBaseTypeName (TConstructor name) = Just name
 extractBaseTypeName (TVar (TypeVar name)) = Just name
-extractBaseTypeName (TApplication base _) = extractBaseTypeName base
+extractBaseTypeName (TApplication name _) = Just name
+extractBaseTypeName (TLiteralApplication name _) = Just name
 extractBaseTypeName _ = Nothing
 
 -- Advanced variance analysis for separated constructor/return type syntax
@@ -540,8 +546,13 @@ analyzeVarianceInType paramName targetType contextVariance = case targetType of
     in combineOptionalVariances argVariance retVariance
 
   -- Type applications: F<A> - variance depends on F's signature
-  TApplication base argTypes ->
+  TApplication _ argTypes ->
     -- For now, assume all type arguments are covariant (can be refined later)
+    let argVariances = [analyzeVarianceInType paramName argType contextVariance | argType <- argTypes]
+    in foldr combineOptionalVariances Nothing argVariances
+    
+  -- Literal applications: Some(x) - similar to type applications
+  TLiteralApplication _ argTypes ->
     let argVariances = [analyzeVarianceInType paramName argType contextVariance | argType <- argTypes]
     in foldr combineOptionalVariances Nothing argVariances
 
@@ -583,10 +594,11 @@ combineOptionalVariances (Just v1) (Just v2) = Just (combineVariances v1 v2)
 containsParam :: T.Text -> Type -> Bool
 containsParam paramName (TGeneric name) = paramName == name
 containsParam paramName (TVar (TypeVar name)) = paramName == name
-containsParam paramName (TFunction t1 t2) = containsParam paramName t1 || containsParam paramName t2
+containsParam paramName (TFunction args ret) = any (containsParam paramName) args || containsParam paramName ret
 containsParam paramName (TUnion types) = any (containsParam paramName) (Set.toList types)
 containsParam paramName (TIntersection types) = any (containsParam paramName) (Set.toList types)
-containsParam paramName (TApplication base args) = containsParam paramName base || any (containsParam paramName) args
+containsParam paramName (TApplication _ args) = any (containsParam paramName) args
+containsParam paramName (TLiteralApplication _ args) = any (containsParam paramName) args
 containsParam _ _ = False
 
 -- Process a single declaration
@@ -624,14 +636,11 @@ inferDecl ast =
               addVar ("TYPE_" <> returnTypeName) groundReturnType
             TConstructor returnTypeName -> do
               addVar ("TYPE_" <> returnTypeName) (TConstructor returnTypeName)
-            TApplication (TVar (TypeVar baseTypeName)) argTypes -> do
+            TApplication baseTypeName argTypes -> do
               -- For polymorphic return types like Typ<string>
-              let groundBaseType = TConstructor baseTypeName
-              let groundReturnType = TApplication groundBaseType argTypes
+              let groundReturnType = TApplication baseTypeName argTypes
               let groundConstructorType = TFunction ctorArgsType groundReturnType
               addVar constructorName groundConstructorType
-              addVar ("TYPE_" <> baseTypeName) groundBaseType
-            TApplication (TConstructor baseTypeName) argTypes -> do
               addVar ("TYPE_" <> baseTypeName) (TConstructor baseTypeName)
             _ -> return ()
         else do
@@ -700,8 +709,10 @@ refineLiteralTypes (TUnion ts) =
   TUnion (Set.map refineLiteralTypes ts)
 refineLiteralTypes (TIntersection ts) =
   TIntersection (Set.map refineLiteralTypes ts)
-refineLiteralTypes (TApplication base args) =
-  TApplication (refineLiteralTypes base) (map refineLiteralTypes args)
+refineLiteralTypes (TApplication name args) =
+  TApplication name (map refineLiteralTypes args)
+refineLiteralTypes (TLiteralApplication name args) =
+  TLiteralApplication name (map refineLiteralTypes args)
 refineLiteralTypes t = t  -- Other types unchanged
 
 -- Check if a constraint contains generic types

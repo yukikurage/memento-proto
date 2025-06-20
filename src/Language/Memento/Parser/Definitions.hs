@@ -14,9 +14,9 @@ import Language.Memento.Data.HFix (unHFix)
 import Language.Memento.Data.HProduct ((:*:) (..))
 import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax (extractSyntax, unMType)
-import Language.Memento.Syntax.Definition (Definition (..))
+import Language.Memento.Syntax.Definition (ConstructorDef (..), Definition (..))
 import qualified Language.Memento.Syntax.MType as SMType
-import Language.Memento.Syntax.Tag (KDefinition, KVariable, KType)
+import Language.Memento.Syntax.Tag (KDefinition, KType, KVariable)
 import Text.Megaparsec (MonadParsec, choice, sepBy, try, (<?>))
 import Text.Megaparsec.Char (string)
 
@@ -30,7 +30,7 @@ parseTypeParameters ::
   m [f KVariable]
 parseTypeParameters = do
   try (PClass.parseAngleBrackets $ sepBy PClass.parseVariable (PClass.parseSymbol ","))
-    <|> return []  -- Empty list if no type parameters
+    <|> return [] -- Empty list if no type parameters
 
 parseTypeAssignments ::
   forall f m s.
@@ -42,40 +42,41 @@ parseTypeAssignments ::
   m [f KType]
 parseTypeAssignments = do
   try (PClass.parseAngleBrackets $ sepBy PClass.parseMType (PClass.parseSymbol ","))
-    <|> return []  -- Empty list if no assignments
+    <|> return [] -- Empty list if no assignments
 
+-- Parse individual constructor: ConstructorName<T, U> : (args...) => ReturnType
+parseConstructorDef ::
+  forall f m s.
+  ( MonadParsec s Text m
+  , PClass.CoreParser m
+  , PClass.MTypeParser f m
+  , PClass.VariableParser f m
+  ) =>
+  m (ConstructorDef f)
+parseConstructorDef = do
+  constructorName <- PClass.parseVariable
+  ctorTypeParams <- parseTypeParameters
+  PClass.parseSymbol ":"
+  constructorType <- PClass.parseMType
+  return $ ConstructorDef constructorName ctorTypeParams constructorType
+
+-- Parse new multi-constructor data definition
+-- data Maybe [Some<T> : (x : T) => Maybe<T>, None<T> : () => Maybe<T>];
 parseDataDefinition ::
   forall h f m s.
   ( MonadParsec s Text m
   , PClass.CoreParser m
   , PClass.MTypeParser f m
   , PClass.VariableParser f m
-  , PClass.VariableParser f m
   , Injective Definition h
   , PClass.FixParser h f m
   ) =>
   m (f KDefinition)
 parseDataDefinition = PClass.parseFix @h $ do
-  constructorName <- PClass.parseVariable
-  ctorTypeParams <- parseTypeParameters
-  PClass.parseSymbol ":"
-  -- For new syntax: data Cons<T> : (x : number, y : T) => Typ<T>
-  ctorArgsAst <- PClass.parseParens $ sepBy (do
-    _ <- PClass.parseVariable @f
-    PClass.parseSymbol ":"
-    PClass.parseMType) (PClass.parseSymbol ",")
-  PClass.parseSymbol "=>"
-  returnTypeName <- PClass.parseVariable
-  returnTypeParams <- parseTypeAssignments
-
-  -- For now, pass the full type as both args and return - constraint generation will split it
-  return $ hInject $ DataDef
-    constructorName
-    ctorTypeParams
-    ctorArgsAst
-    returnTypeName
-    returnTypeParams
-
+  dataName <- PClass.parseVariable
+  constructors <- PClass.parseBrackets $ sepBy parseConstructorDef (PClass.parseSymbol ",")
+  _ <- PClass.parseSymbol ";"
+  return $ hInject $ DataDef dataName constructors
 
 parseValDefinition ::
   forall h f m s.
