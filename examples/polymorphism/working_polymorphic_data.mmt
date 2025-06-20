@@ -1,0 +1,28 @@
+// Polymorphic data creation (pattern matching not yet supported)
+// This demonstrates that polymorphic data creation works, but 
+// pattern matching with polymorphic data has existential type issues
+
+data Box [Box<T> : (value : T) => Box<T>];
+
+// These work fine - polymorphic data creation
+val box_number : Box<number> := Box(42);
+val box_string : Box<string> := Box("hello");
+
+// TODO: Pattern matching with polymorphic data causes existential type errors
+// This would be the goal but doesn't work yet:
+// val unbox<T> : (box : Box<T>) => T := (box : Box<T>) =>
+//   switch (box) [
+//     (Box(value) : Box<T>) => value
+//   ];
+
+// Simple non-polymorphic example that works
+data SimpleBox [MkBox : (value : number) => SimpleBox];
+
+val simple_box : SimpleBox := MkBox(42);
+
+val extract_simple : (box : SimpleBox) => number := (box : SimpleBox) =>
+  switch (box) [
+    (MkBox(value) : SimpleBox) => value
+  ];
+
+val result : number := extract_simple(simple_box);

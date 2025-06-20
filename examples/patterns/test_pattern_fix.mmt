@@ -1,0 +1,10 @@
+// Test pattern matching with correct symbol generation
+data Lazy [MkLazy : (thunk : (x : ()) => number) => Lazy];
+
+val force : (lazy : Lazy) => number := (lazy : Lazy) =>
+  switch (lazy) [
+    (MkLazy(thunk) : Lazy) => thunk(())
+  ];
+
+val delayed : Lazy := MkLazy((x : ()) => 42);
+val result : number := force(delayed);

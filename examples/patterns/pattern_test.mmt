@@ -1,5 +1,5 @@
 // Test zero-argument constructor pattern matching
-data A : () => Type;
+data Type [A : () => Type];
 
 val test : (x : Type) => number := (x : Type) =>
   switch (x) [

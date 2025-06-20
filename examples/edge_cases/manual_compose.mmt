@@ -1,6 +1,0 @@
-// Manual composition without polymorphic function
-val inc : (x : number) => number := (x : number) => x + 1;
-val double : (x : number) => number := (x : number) => x * 2;
-
-val manual_compose : (x : number) => number := (x : number) => double(inc(x));
-val test : number := manual_compose(5);

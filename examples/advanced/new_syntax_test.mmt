@@ -1,0 +1,29 @@
+// Test new data definition syntax with correct usage
+// According to CLAUDE.md: Data return types cannot have type parameters
+
+// Simple monomorphic data type
+data NumType [MkNumber : (x : number) => NumType];
+
+// Polymorphic data types with multiple constructors
+data Option [Some<T> : (value : T) => Option, None<T> : () => Option];
+
+// Polymorphic pair type
+data PairType [Pair<A> : (first : A, second : A) => PairType];
+
+// List type with two constructors
+data List [Cons<T> : (head : T, tail : List) => List, Nil<T> : () => List];
+
+// Example usage showing multi-constructor pattern matching
+val safe_head<T> : (list : List) => Option := (list : List) =>
+  switch (list) [
+    (Cons(head, tail) : List) => Some(head),
+    (Nil() : List) => None()
+  ];
+
+// Create some test data
+val my_list : List := Cons(1, Cons(2, Cons(3, Nil())));
+val empty_list : List := Nil();
+
+// Test the functions
+val first : Option := safe_head(my_list);
+val none : Option := safe_head(empty_list);
