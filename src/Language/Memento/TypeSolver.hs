@@ -4,7 +4,6 @@ module Language.Memento.TypeSolver
   , module Language.Memento.TypeSolver.Solver
   , module Language.Memento.TypeSolver.Subtype
   , module Language.Memento.TypeSolver.Normalize
-  , module Language.Memento.TypeSolver.Demo
   , module Language.Memento.TypeSolver.ConstraintGen
   , typeCheckProgram
   , typeCheckAST
@@ -26,8 +25,7 @@ typeCheckProgram variableNames =
       vars = map TypeVar variableNames
       constraints = Set.fromList
         [ Subtype (TVar (TypeVar name)) TNumber | name <- variableNames ]
-  in case solveConstraints constraints of
-    Success subst -> Right $ Map.fromList
-      [(name, applySubst subst (TVar (TypeVar name))) | name <- variableNames]
-    Contradiction -> Left "Type contradiction"
-    Ambiguous _ -> Left "Ambiguous types"
+  in case solve Map.empty constraints of  -- Empty variance map for testing
+    Success -> Right $ Map.fromList
+      [(name, TVar (TypeVar name)) | name <- variableNames]  -- No substitution returned
+    Contradiction msg -> Left $ "Type contradiction: " ++ msg

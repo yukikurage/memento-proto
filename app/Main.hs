@@ -7,7 +7,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
 import Language.Memento.Parser (parseProgramText)
-import Language.Memento.TypeSolver (typeCheckProgram, typeCheckAST, runAllDemos)
+import Language.Memento.TypeSolver (typeCheckProgram, typeCheckAST)
 
 -- import Language.Memento.TypeChecker (typeCheckProgram)
 import System.Directory (createDirectoryIfMissing)

@@ -7,6 +7,8 @@ Based on the docs/TYPE_SOLVER.md
 -}
 
 import Control.Monad (foldM)
+
+-- import Debug.Trace (trace)
 import Data.Either (partitionEithers)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, mapMaybe)
@@ -20,12 +22,14 @@ import Language.Memento.TypeSolver.Types
 solve :: TypeConstructorVariances -> ConstraintSet -> SolveResult
 solve varMap cs =
   let normalized = Set.map normalizeConstraint cs
-   in case decomposeConstraintsAll varMap normalized of
+   in -- _ = trace ("solve: constraints = " ++ show (Set.size cs) ++ " constraints: " ++ show cs) ()
+      case decomposeConstraintsAll varMap normalized of
         Left err -> Contradiction err
         Right remaining ->
           let substed = substInstancesAsPossible remaining -- Try to substitute instances as much as possible
               bounds = calculateInstanceFromBounds
-           in case branchConstraints varMap substed of
+           in -- _ = trace ("solve: after substitution, constraints = " ++ show substed) ()
+              case branchConstraints varMap substed of
                 Nothing ->
                   -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
                   case checkContradictions (calculatePropagationAll substed) of
@@ -120,7 +124,10 @@ calculateInstanceFromBounds :: Bounds -> Maybe Type
 calculateInstanceFromBounds (Bounds lowers uppers)
   | any isGeneric uppers || elem TNever uppers = Just TNever
   | any isGeneric lowers || elem TUnknown lowers = Just TUnknown
-  | not (Set.null intersections) = Just (Set.findMin intersections) -- Pick the most general type from intersections
+  | not (Set.null intersections) =
+      -- Pick any element from intersections, but avoid self-substitution
+      -- We want to allow x <- y but not x <- x
+      Just (Set.findMin intersections)
   | otherwise = Nothing
  where
   intersections = Set.intersection (Set.fromList lowers) (Set.fromList uppers)
@@ -146,14 +153,18 @@ constraintVars (Subtype t1 t2) =
 -- | Try to instantiate type variables as much as possible
 substInstancesAsPossible :: ConstraintSet -> ConstraintSet
 substInstancesAsPossible cs =
-  let vars = Set.unions (Set.map constraintVars cs)
-      boundsMap = Map.fromList [(var, calculateBounds var cs) | var <- Set.toList vars]
+  let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
+      vars = Set.unions (Set.map constraintVars csFiltered)
+      boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
       instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
-   in case Map.lookupMin instances of
+      -- Filter out self-substitutions (x <- x)
+      validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
+   in -- _ = trace ("substInstancesAsPossible: vars = " ++ show vars ++ ", instances = " ++ show instances ++ ", valid = " ++ show validInstances) ()
+      case Map.lookupMin validInstances of
         Just (var, instanceType) ->
-          let newCs = Set.map (applySubstConstraint (Map.singleton var instanceType)) cs
+          let newCs = Set.map (applySubstConstraint (Map.singleton var instanceType)) csFiltered
            in substInstancesAsPossible newCs -- Recur with the new constraints
-        Nothing -> cs -- No more instances to substitute
+        Nothing -> csFiltered -- No more instances to substitute
 
 {- | Branching BRANCH node (ref : DECOMPOSE.md)
 | with some nodes, may contain substitutions
@@ -253,16 +264,22 @@ calculatePropagation cs =
   let vars = Set.unions (Set.map constraintVars cs)
       boundsMap = Map.fromList [(var, calculateBounds var cs) | var <- Set.toList vars]
       newConstraints = concat $ Map.elems $ Map.map (\(Bounds lowers uppers) -> [Subtype lower upper | lower <- lowers, upper <- uppers]) boundsMap
-   in if all (`Set.member` cs) newConstraints
+      -- Filter out constraints that already exist or are trivial
+      actuallyNewConstraints = filter (\c -> not (Set.member c cs) && not (isTrivial c)) newConstraints
+   in if null actuallyNewConstraints
         then Nothing -- No new constraints to add
-        else Just (Set.fromList newConstraints) -- Return the new constraints
+        else Just (Set.fromList actuallyNewConstraints) -- Return only truly new constraints
+ where
+  isTrivial (Subtype t1 t2) = t1 == t2
 
 -- | Recursively calculate propagation until no new constraints are added
 calculatePropagationAll :: ConstraintSet -> ConstraintSet
 calculatePropagationAll cs =
   case calculatePropagation cs of
     Nothing -> cs -- No new constraints, return original
-    Just newCs -> calculatePropagationAll (Set.union cs $ substInstancesAsPossible newCs) -- Recur with
+    Just newCs ->
+      -- Don't call substInstancesAsPossible on newCs - just add them and continue propagating
+      calculatePropagationAll (Set.union cs newCs)
 
 {- | Assume that constraints is made by calculatePropagationAll.
 | Now, we can check contradictions.
@@ -285,3 +302,9 @@ checkContradictions cs = mapM_ check $ Set.toList cs
 
 normalizeConstraint :: Constraint -> Constraint
 normalizeConstraint (Subtype t1 t2) = Subtype (normalize t1) (normalize t2)
+
+-- Remove reflexive constraints and other trivial constraints
+filterTrivialConstraints :: ConstraintSet -> ConstraintSet
+filterTrivialConstraints = Set.filter (not . isTrivial)
+ where
+  isTrivial (Subtype t1 t2) = t1 == t2

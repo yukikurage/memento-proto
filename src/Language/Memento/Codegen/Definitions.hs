@@ -80,7 +80,7 @@ extractTypeName :: AST KType -> Text
 extractTypeName astT = case unHFix astT of
   _meta :*: stx -> case unMType stx of
     TVar v -> genVariable v
-    TApplication base _args -> extractTypeName base
+    TApplication base _args -> genVariable base
     TFunction _params returnType -> extractTypeName returnType
     _ -> error ("extractTypeName: Unsupported return type: " <> show (unMType stx))
 
