@@ -14,29 +14,27 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Debug.Trace (trace)
+import Debug.Trace (trace, traceM)
 import Language.Memento.TypeSolver.Normalize
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
 
-solve :: GenericBoundsMap -> TypeConstructorVariances -> ConstraintSet -> SolveResult
-solve genBndMap varMap cs =
+solve :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> SolveResult
+solve varMap genBndMap cs =
   let normalized = Set.map normalizeConstraint cs
-   in -- trace ("solve: constraints = " ++ show (Set.size cs) ++ " constraints: " ++ formatConstraintSet cs)
-      case decomposeConstraintsAll varMap genBndMap normalized of
+      substed = substInstancesAsPossible normalized -- Try to substitute instances as much as possible
+   in case decomposeConstraintsAll varMap genBndMap substed of
         Left err -> Contradiction err
         Right remaining ->
-          let substed = substInstancesAsPossible remaining -- Try to substitute instances as much as possible
-              bounds = calculateInstanceFromBounds
-           in -- trace ("solve: after substitution, constraints = " ++ formatConstraintSet substed)
-              case branchConstraints varMap substed of
+          let
+           in case branchConstraints varMap remaining of
                 Nothing ->
                   -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
-                  case checkContradictions (calculatePropagationAll substed) of
+                  case checkContradictions varMap genBndMap (calculatePropagationAll remaining) of
                     Left err -> Contradiction err
                     Right () -> Success
                 Just branches ->
-                  let branchResults = map (solve genBndMap varMap) branches
+                  let branchResults = map (solve varMap genBndMap) branches
                    in if Success `elem` branchResults
                         then Success
                         else Contradiction "Ambiguous branches found"
@@ -46,6 +44,7 @@ solve genBndMap varMap cs =
 -}
 decomposeConstraintsAll :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String ConstraintSet
 decomposeConstraintsAll varMap bounds cs = do
+  -- traceM ("decomposeConstraintsAll: constraints = " ++ formatConstraintSet cs)
   (decomposed, remaining) <- decomposeConstraints varMap bounds cs
   if Set.null remaining
     then Right decomposed -- No more constraints to decompose
@@ -72,10 +71,9 @@ decomposeConstraint varMap bounds cns = case cns of
   -- If both sides are concrete (no type variables), check subtypes directly
   Subtype t1 t2
     | not (containsVar t1 || containsVar t2) ->
-        if isSubtypeWithBounds bounds t1 t2
+        if isSubtypeWithBounds' varMap bounds t1 t2
           then Right (Set.empty, Set.empty) -- No contradiction, return empty set
           else Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ ")"
-  -- Generic bound propagation - THE KEY PART!
   Subtype (TGeneric name) t2 ->
     case Map.lookup name bounds of
       Just (GenericBounds _ upper) -> Right (Set.empty, Set.singleton (Subtype upper t2))
@@ -217,8 +215,7 @@ substInstancesAsPossible cs =
       instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
       -- Filter out self-substitutions (x <- x)
       validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
-   in -- _ = trace ("substInstancesAsPossible: vars = " ++ show vars ++ ", instances = " ++ show instances ++ ", valid = " ++ show validInstances) ()
-      case Map.lookupMin validInstances of
+   in case Map.lookupMin validInstances of
         Just (var, instanceType) ->
           let newCs = Set.map (applySubstConstraint (Map.singleton var instanceType)) csFiltered
            in substInstancesAsPossible newCs -- Recur with the new constraints
@@ -244,12 +241,12 @@ branchConstraint varMap cns = case cns of
         substIfNever = Map.singleton var TNever
         substIfFunc = Map.singleton var (TFunction argVars retVar)
      in Just
-          [ (substIfNever, Set.empty)
-          ,
+          [
             ( substIfFunc
             , Set.fromList [Subtype arg argVar | (argVar, arg) <- zip argVars args] -- Contravariant
                 `Set.union` Set.singleton (Subtype retVar ret) -- Covariant
             )
+          , (substIfNever, Set.empty)
           ]
   Subtype (TFunction args ret) (TVar var@(TypeVar varName)) ->
     let argVars = [TVar $ TypeVar (varName <> "_arg_" <> T.pack (show n)) | n <- [1 .. length args]]
@@ -257,12 +254,12 @@ branchConstraint varMap cns = case cns of
         substIfUnknown = Map.singleton var TUnknown
         substIfFunc = Map.singleton var (TFunction argVars retVar)
      in Just
-          [ (substIfUnknown, Set.empty) -- Unknown is a supertype of function
-          ,
+          [
             ( substIfFunc
             , Set.fromList [Subtype argVar arg | (argVar, arg) <- zip argVars args] -- Covariant
                 `Set.union` Set.singleton (Subtype ret retVar) -- Contravariant
             )
+          , (substIfUnknown, Set.empty) -- Unknown is a supertype of function
           ]
   Subtype (TVar var@(TypeVar varName)) (TApplication name args)
     | Just variances <- Map.lookup name varMap ->
@@ -270,11 +267,11 @@ branchConstraint varMap cns = case cns of
             substIfNever = Map.singleton var TNever
             substIfApp = Map.singleton var (TApplication name argVars)
          in Just
-              [ (substIfNever, Set.empty) -- Never is a subtype of application
-              ,
+              [
                 ( substIfApp
                 , Set.fromList (concat $ zipWith3 mkConstraintWithVariance argVars args variances) -- Apply variances
                 )
+              , (substIfNever, Set.empty) -- Never is a subtype of application
               ]
   Subtype (TApplication name args) (TVar var@(TypeVar varName))
     | Just variances <- Map.lookup name varMap ->
@@ -282,11 +279,11 @@ branchConstraint varMap cns = case cns of
             substIfUnknown = Map.singleton var TUnknown
             substIfApp = Map.singleton var (TApplication name argVars)
          in Just
-              [ (substIfUnknown, Set.empty) -- Unknown is a supertype of application
-              ,
+              [
                 ( substIfApp
                 , Set.fromList (concat $ zipWith3 mkConstraintWithVariance args argVars variances) -- Apply variances
                 )
+              , (substIfUnknown, Set.empty) -- Unknown is a supertype of application
               ]
   Subtype _ _ -> Nothing
 
@@ -352,12 +349,12 @@ calculatePropagationAll cs =
 | 3. var <: var
 | It is enough to check pattern 0, because 1, 2, 3 are already propagated to 0.
 -}
-checkContradictions :: ConstraintSet -> Either String ()
-checkContradictions cs = mapM_ check $ Set.toList cs
+checkContradictions :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String ()
+checkContradictions varMap genMap cs = mapM_ check $ Set.toList cs
  where
   check (Subtype t1 t2)
     | not (containsVar t1 || containsVar t2) =
-        if isSubtype t1 t2
+        if isSubtypeWithBounds' varMap genMap t1 t2
           then Right () -- No contradiction
           else Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ ")"
   check _ = Right ()

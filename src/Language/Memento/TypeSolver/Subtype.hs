@@ -3,6 +3,7 @@ module Language.Memento.TypeSolver.Subtype where
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Debug.Trace (trace)
 import Language.Memento.TypeSolver.Types
 
 -- Check if t1 <: t2 (only for types without variables)
@@ -125,23 +126,23 @@ isSubtypeWithBounds' variances bounds (TUnion ts) t2 =
 isSubtypeWithBounds' variances bounds t1 (TUnion ts) =
   any (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
 -- Intersection types
-isSubtypeWithBounds' variances bounds t1 (TIntersection ts) =
-  all (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
+isSubtypeWithBounds' variances bounds t1 (TIntersection ts) = all (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
 isSubtypeWithBounds' variances bounds (TIntersection ts) t2 =
   any (\t -> isSubtypeWithBounds' variances bounds t t2) (Set.toList ts)
 -- Generic types with bounds - THIS IS THE KEY PART!
-isSubtypeWithBounds' _ bounds (TGeneric name1) (TGeneric name2) = name1 == name2
+isSubtypeWithBounds' variances bounds (TGeneric name1) (TGeneric name2)
+  | name1 == name2 = True
+  | GenericBounds lower1 upper1 <- lookupGenericBounds name1 bounds
+  , GenericBounds lower2 upper2 <- lookupGenericBounds name2 bounds =
+      isSubtypeWithBounds' variances bounds upper1 lower2
 isSubtypeWithBounds' variances bounds (TGeneric name) t2 =
   -- Generic <: t2 iff upper_bound <: t2
-  case Map.lookup name bounds of
-    Just (GenericBounds _ upper) -> isSubtypeWithBounds' variances bounds upper t2
-    Nothing -> t2 == TUnknown -- No bounds info, default to old behavior
+  case lookupGenericBounds name bounds of
+    GenericBounds _ upper -> isSubtypeWithBounds' variances bounds upper t2
 isSubtypeWithBounds' variances bounds t1 (TGeneric name) =
   -- t1 <: Generic iff t1 <: lower_bound
-  case Map.lookup name bounds of
-    Just (GenericBounds lower _) -> isSubtypeWithBounds' variances bounds t1 lower
-    Nothing -> t1 == TNever -- No bounds info, default to old behavior
-    -- Type application with variance-aware subtyping
+  case lookupGenericBounds name bounds of
+    GenericBounds lower _ -> isSubtypeWithBounds' variances bounds t1 lower
 isSubtypeWithBounds' varMap bounds (TApplication typeConsName1 args1) (TApplication typeConsName2 args2)
   | typeConsName1 /= typeConsName2 = False
   | otherwise =
@@ -152,7 +153,6 @@ isSubtypeWithBounds' varMap bounds (TApplication typeConsName1 args1) (TApplicat
     case Map.lookup typeConsName varMap of
       Nothing -> error $ "No variance information for type constructor: " ++ T.unpack typeConsName
       Just variances -> checkArgumentsWithVariance variances args1 args2
-
   checkArgumentsWithVariance :: [Variance] -> [Type] -> [Type] -> Bool
   checkArgumentsWithVariance _ [] [] = True
   checkArgumentsWithVariance (variance : variances) (arg1 : args1) (arg2 : args2) =

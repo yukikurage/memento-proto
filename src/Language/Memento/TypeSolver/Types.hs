@@ -11,6 +11,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Base (List)
+import Data.Maybe (fromMaybe)
 
 -- Type representation
 data Type
@@ -323,71 +324,196 @@ data GenericBounds = GenericBounds
 
 type GenericBoundsMap = Map.Map T.Text GenericBounds
 
+formatBoundsMap :: GenericBoundsMap -> String
+formatBoundsMap boundsMap =
+  "Generic Bounds:\n"
+    ++ unlines
+      [ " : " ++ formatType lower ++ " <: " ++ T.unpack name ++ " < " ++ formatType upper
+      | (name, GenericBounds lower upper) <- Map.toList boundsMap
+      ]
+
+lookupGenericBounds :: T.Text -> GenericBoundsMap -> GenericBounds
+lookupGenericBounds name boundsMap =
+  fromMaybe (GenericBounds TNever TUnknown) (Map.lookup name boundsMap)
+
 -- Compute generic bounds (bounds that generic type is possible to move) from constraints
 -- It's safe to compute bounds that is more general than actual. e. g., actually a <: T <: b but computing as (never <: T <: b) is safe
 -- We should handle nested generics which means,  bool <: (T | number) ~>   bool <: T <: unknown
 computeGenericBounds :: AssumptionSet -> GenericBoundsMap
-computeGenericBounds assumptions = 
+computeGenericBounds assumptions =
+  -- Start with the most conservative bounds for all generics
   let constraintList = Set.toList assumptions
-      allGenerics = Set.unions (map extractGenericsFromConstraint constraintList)
-   in Map.fromList [(name, extractBoundsForGeneric name constraintList) | name <- Set.toList allGenerics]
+      allGenerics = collectAllGenerics constraintList
+      -- Process constraints iteratively to refine bounds
+      initialBounds = Map.fromList [(g, GenericBounds TNever TUnknown) | g <- Set.toList allGenerics]
+      -- First pass: compute bounds without considering other generics in bounds
+      simpleBounds = refineGenericBounds constraintList initialBounds
+   in -- Second pass: remove circular references in bounds
+      removeCircularReferences simpleBounds
  where
-  -- Extract all generic names mentioned in a constraint
+  -- Collect all generic type names from constraints
+  collectAllGenerics :: [Constraint] -> Set.Set T.Text
+  collectAllGenerics = Set.unions . map extractGenericsFromConstraint
+
   extractGenericsFromConstraint :: Constraint -> Set.Set T.Text
-  extractGenericsFromConstraint (Subtype t1 t2) = Set.union (extractGenericsFromType t1) (extractGenericsFromType t2)
+  extractGenericsFromConstraint (Subtype t1 t2) =
+    Set.union (extractGenericsFromType t1) (extractGenericsFromType t2)
 
   extractGenericsFromType :: Type -> Set.Set T.Text
-  extractGenericsFromType (TGeneric name) = Set.singleton name
-  extractGenericsFromType (TFunction args ret) = Set.unions (map extractGenericsFromType args) `Set.union` extractGenericsFromType ret
-  extractGenericsFromType (TUnion ts) = Set.unions (map extractGenericsFromType (Set.toList ts))
-  extractGenericsFromType (TIntersection ts) = Set.unions (map extractGenericsFromType (Set.toList ts))
-  extractGenericsFromType (TApplication _ args) = Set.unions (map extractGenericsFromType args)
-  extractGenericsFromType _ = Set.empty
+  extractGenericsFromType = go
+   where
+    go (TGeneric name) = Set.singleton name
+    go (TFunction args ret) = Set.unions (map go args) `Set.union` go ret
+    go (TUnion ts) = Set.unions (map go (Set.toList ts))
+    go (TIntersection ts) = Set.unions (map go (Set.toList ts))
+    go (TApplication _ args) = Set.unions (map go args)
+    go _ = Set.empty
 
-  -- Extract bounds for a specific generic from all constraints
-  extractBoundsForGeneric :: T.Text -> [Constraint] -> GenericBounds
-  extractBoundsForGeneric targetGeneric constraints =
-    let (lowers, uppers) = foldl (extractBoundsFromConstraint targetGeneric) ([], []) constraints
-     in GenericBounds 
-          { gbLower = if null lowers then TNever else mkUnion lowers
-          , gbUpper = if null uppers then TUnknown else mkIntersection uppers
-          }
+  -- Refine bounds by processing each constraint
+  refineGenericBounds :: [Constraint] -> GenericBoundsMap -> GenericBoundsMap
+  refineGenericBounds constraints bounds =
+    foldl processConstraint bounds constraints
 
-  -- Extract bounds for a target generic from a single constraint  
-  extractBoundsFromConstraint :: T.Text -> ([Type], [Type]) -> Constraint -> ([Type], [Type])
-  extractBoundsFromConstraint targetGeneric (lowers, uppers) (Subtype t1 t2) =
-    let newLowers = extractLowerBounds targetGeneric t1 t2 ++ lowers
-        newUppers = extractUpperBounds targetGeneric t1 t2 ++ uppers
-     in (newLowers, newUppers)
+  -- Process a single constraint to refine bounds
+  processConstraint :: GenericBoundsMap -> Constraint -> GenericBoundsMap
+  processConstraint bounds (Subtype t1 t2) =
+    -- For each generic in the constraint, update its bounds
+    let genericsInConstraint = Set.union (extractGenericsFromType t1) (extractGenericsFromType t2)
+     in foldl (\b g -> updateBoundsForGeneric g t1 t2 b) bounds (Set.toList genericsInConstraint)
 
-  -- Extract lower bounds: what must be subtypes of the target generic
-  -- For constraint t1 <: t2, if target appears positively in t2, then parts of t1 give lower bounds
-  extractLowerBounds :: T.Text -> Type -> Type -> [Type]
-  extractLowerBounds target t1 t2
-    | t2 == TGeneric target = [t1]  -- t1 <: target
-    | TUnion ts <- t2, TGeneric target `Set.member` ts = 
-        -- t1 <: (target | other) means t1 <: target (conservatively)
-        [t1]
-    | TIntersection ts <- t2, TGeneric target `Set.member` ts =
-        -- t1 <: (target & other) means t1 <: target 
-        [t1]
-    | TFunction args ret <- t2 =
-        -- For t1 <: (... -> ret), if target appears in ret positively
-        extractLowerBounds target t1 ret
-    | otherwise = []
+  -- Update bounds for a specific generic based on a constraint
+  updateBoundsForGeneric :: T.Text -> Type -> Type -> GenericBoundsMap -> GenericBoundsMap
+  updateBoundsForGeneric targetGeneric t1 t2 boundsMap =
+    case Map.lookup targetGeneric boundsMap of
+      Just (GenericBounds currentLower currentUpper) ->
+        let newLower = refineLowerBound targetGeneric t1 t2 currentLower
+            newUpper = refineUpperBound targetGeneric t1 t2 currentUpper
+         in Map.insert targetGeneric (GenericBounds newLower newUpper) boundsMap
+      Nothing -> boundsMap -- Should not happen
 
-  -- Extract upper bounds: what the target generic must be a subtype of
-  -- For constraint t1 <: t2, if target appears positively in t1, then parts of t2 give upper bounds  
-  extractUpperBounds :: T.Text -> Type -> Type -> [Type]
-  extractUpperBounds target t1 t2
-    | t1 == TGeneric target = [t2]  -- target <: t2
-    | TUnion ts <- t1, TGeneric target `Set.member` ts =
-        -- (target | other) <: t2 means target <: t2
-        [t2]
-    | TIntersection ts <- t1, TGeneric target `Set.member` ts =
-        -- (target & other) <: t2 means target <: t2  
-        [t2]
-    | TFunction args ret <- t1 =
-        -- For (... -> ret) <: t2, if target appears in ret positively
-        extractUpperBounds target ret t2
-    | otherwise = []
+  -- Refine lower bound based on constraint t1 <: t2
+  refineLowerBound :: T.Text -> Type -> Type -> Type -> Type
+  refineLowerBound target t1 t2 currentLower
+    -- Direct case: t1 <: target
+    | t2 == TGeneric target = mkUnion [currentLower, t1]
+    -- Union case: t1 <: (target | other)
+    -- For bool <: (T | number), we know bool must be subtype of T or number
+    -- Since bool is not subtype of number, it must be subtype of T
+    | TUnion ts <- t2
+    , TGeneric target `Set.member` ts =
+        let otherTypes = Set.filter (/= TGeneric target) ts
+            -- Check if t1 is already a subtype of any other type in the union
+            -- If not, then t1 must be a subtype of target
+            isSubtypeOfOthers = any (\other -> isConservativeSubtype t1 other) (Set.toList otherTypes)
+         in if isSubtypeOfOthers
+              then currentLower -- t1 is already handled by other types
+              else mkUnion [currentLower, t1] -- t1 must be subtype of target
+              -- Intersection case: t1 <: (target & other)
+    | TIntersection ts <- t2, TGeneric target `Set.member` ts = mkUnion [currentLower, t1]
+    | otherwise = currentLower
+
+  -- Conservative subtype check (without using bounds to avoid recursion)
+  isConservativeSubtype :: Type -> Type -> Bool
+  isConservativeSubtype TNever _ = True
+  isConservativeSubtype _ TUnknown = True
+  isConservativeSubtype t1 t2 | t1 == t2 = True
+  isConservativeSubtype (TLiteral (LNumber _)) TNumber = True
+  isConservativeSubtype (TLiteral (LBool _)) TBool = True
+  isConservativeSubtype (TLiteral (LString _)) TString = True
+  isConservativeSubtype _ _ = False
+
+  -- Refine upper bound based on constraint t1 <: t2
+  refineUpperBound :: T.Text -> Type -> Type -> Type -> Type
+  refineUpperBound target t1 t2 currentUpper
+    -- Direct case: target <: t2
+    | t1 == TGeneric target = mkIntersection [currentUpper, t2]
+    -- Union case: (target | other) <: t2
+    | TUnion ts <- t1, TGeneric target `Set.member` ts = mkIntersection [currentUpper, t2]
+    -- Intersection case: (target & other) <: t2
+    -- Conservatively don't update
+    | TIntersection ts <- t1, TGeneric target `Set.member` ts = currentUpper
+    | otherwise = currentUpper
+  
+  -- Remove circular references in generic bounds
+  removeCircularReferences :: GenericBoundsMap -> GenericBoundsMap
+  removeCircularReferences boundsMap =
+    let dependencies = computeDependencies boundsMap
+        sccs = stronglyConnectedComponents dependencies
+        -- For each SCC, if it has cycles, simplify the bounds
+        simplifiedBounds = foldl simplifySCC boundsMap sccs
+     in simplifiedBounds
+   where
+    -- Compute which generics depend on which other generics
+    computeDependencies :: GenericBoundsMap -> Map.Map T.Text (Set.Set T.Text)
+    computeDependencies bounds =
+      Map.mapWithKey (\name (GenericBounds lower upper) ->
+        Set.union (extractGenericsFromType lower) (extractGenericsFromType upper)
+      ) bounds
+    
+    -- Find strongly connected components (cycles)
+    stronglyConnectedComponents :: Map.Map T.Text (Set.Set T.Text) -> [[T.Text]]
+    stronglyConnectedComponents deps =
+      let nodes = Map.keys deps
+          -- Simple SCC algorithm - just find direct cycles for now
+          findCycles = [ [n1, n2] | 
+                         n1 <- nodes,
+                         n2 <- nodes, 
+                         n1 /= n2,
+                         n2 `Set.member` Map.findWithDefault Set.empty n1 deps,
+                         n1 `Set.member` Map.findWithDefault Set.empty n2 deps ]
+          -- Also include self-cycles
+          selfCycles = [ [n] | 
+                         n <- nodes,
+                         n `Set.member` Map.findWithDefault Set.empty n deps ]
+       in nub (selfCycles ++ findCycles)
+    
+    -- Simplify bounds for a strongly connected component
+    simplifySCC :: GenericBoundsMap -> [T.Text] -> GenericBoundsMap
+    simplifySCC bounds [] = bounds
+    simplifySCC bounds [single] =
+      -- Self-reference: remove self from bounds
+      case Map.lookup single bounds of
+        Nothing -> bounds
+        Just (GenericBounds lower upper) ->
+          let cleanLower = removeSelfReference single lower
+              cleanUpper = removeSelfReference single upper
+           in Map.insert single (GenericBounds cleanLower cleanUpper) bounds
+    simplifySCC bounds cycle@(_:_:_) =
+      -- Multi-node cycle: remove mutual references
+      foldl (\b name -> 
+        case Map.lookup name b of
+          Nothing -> b
+          Just (GenericBounds lower upper) ->
+            let otherNodes = Set.fromList (filter (/= name) cycle)
+                cleanLower = removeReferences otherNodes lower
+                cleanUpper = removeReferences otherNodes upper
+             in Map.insert name (GenericBounds cleanLower cleanUpper) b
+      ) bounds cycle
+    
+    -- Remove self-reference from a type
+    removeSelfReference :: T.Text -> Type -> Type
+    removeSelfReference name = removeReferences (Set.singleton name)
+    
+    -- Remove references to specific generics from a type
+    removeReferences :: Set.Set T.Text -> Type -> Type
+    removeReferences refs = go
+     where
+      go (TGeneric n) | n `Set.member` refs = TNever -- Replace with bottom type
+      go (TUnion ts) = 
+        let cleaned = Set.map go ts
+            -- Remove TNever from unions
+            filtered = Set.filter (/= TNever) cleaned
+         in if Set.null filtered then TNever else mkUnion (Set.toList filtered)
+      go (TIntersection ts) = 
+        let cleaned = Set.map go ts
+            -- Remove TUnknown from intersections
+            filtered = Set.filter (/= TUnknown) cleaned
+         in if Set.null filtered then TUnknown else mkIntersection (Set.toList filtered)
+      go (TFunction args ret) = TFunction (map go args) (go ret)
+      go (TApplication name args) = TApplication name (map go args)
+      go t = t
+    
+    -- Helper to remove duplicates
+    nub :: Eq a => [a] -> [a]
+    nub [] = []
+    nub (x:xs) = x : nub (filter (/= x) xs)

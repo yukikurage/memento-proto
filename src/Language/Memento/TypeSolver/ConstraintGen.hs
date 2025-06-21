@@ -52,6 +52,7 @@ data InferContext = InferContext
   , icConstraints :: ConstraintSet
   , icTypeEnv :: Map.Map T.Text TypeScheme -- Maps variable names to their type schemes
   , icTypeConstructors :: Map.Map T.Text TypeConstructorInfo
+  , icTemporaryTypeConstructors :: Set.Set T.Text -- For data definition
   , icConstructors :: Set.Set T.Text
   , icGenericTypes :: Map.Map T.Text T.Text
   , icAssumptions :: AssumptionSet -- Type variable substitutions
@@ -82,6 +83,7 @@ inferProgram ast = do
           , icConstraints = Set.empty
           , icTypeEnv = Map.empty
           , icTypeConstructors = Map.empty
+          , icTemporaryTypeConstructors = Set.empty
           , icConstructors = Set.empty
           , icGenericTypes = Map.empty
           , icAssumptions = Set.empty
@@ -95,11 +97,11 @@ inferProgram ast = do
       -- traceM $ formatTypeEnv $ icTypeEnv finalCtx
       let genBndMap = computeGenericBounds $ icAssumptions finalCtx
 
-      case solve genBndMap (Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx) filteredConstraints of
+      case solve (Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx) genBndMap filteredConstraints of
         Success ->
           Right (icTypeEnv finalCtx)
         Contradiction msg ->
-          Left $ "Type error: " ++ msg ++ "\n" ++ formatConstraintSet filteredConstraints
+          Left $ "Type error: " ++ msg ++ "\n" ++ formatConstraintSet filteredConstraints ++ "\n" ++ formatBoundsMap genBndMap
  where
   -- Process the program
   inferProgramM :: AST KProgram -> InferM ()
@@ -156,14 +158,6 @@ freshGenericsWithPrefix prefix = do
   put ctx{icVarCounter = counter + 1}
   return $ "_" <> prefix <> T.pack (show counter)
 
--- Create fresh existential type variables for GADT pattern matching
-freshExistentialVar :: InferM TypeVar
-freshExistentialVar = do
-  ctx <- get
-  let counter = icVarCounter ctx
-  put ctx{icVarCounter = counter + 1}
-  return $ TypeVar $ T.pack ("∃" ++ show counter)
-
 addConstraint :: Constraint -> InferM ()
 addConstraint c = modify $ \ctx -> ctx{icConstraints = Set.insert c (icConstraints ctx)}
 
@@ -193,8 +187,7 @@ removeGenericType :: T.Text -> InferM ()
 removeGenericType name = modify $ \ctx -> ctx{icGenericTypes = Map.delete name (icGenericTypes ctx)}
 
 getTypeConstructorVariances :: InferM TypeConstructorVariances
-getTypeConstructorVariances = do
-  gets (Map.map tciVariance . icTypeConstructors)
+getTypeConstructorVariances = gets (Map.map tciVariance . icTypeConstructors)
 
 -- Assumption management
 getAssumptions :: InferM AssumptionSet
@@ -237,13 +230,19 @@ convertMType ast =
           ctx <- get
           case Map.lookup name (icTypeConstructors ctx) of
             Just (TypeConstructorInfo k _ _) | k == 0 -> return $ TApplication name []
-            _ -> case Map.lookup name (icGenericTypes ctx) of
-              Just g -> do
-                -- If the name is in generic types, treat it as a generic type
-                return $ TGeneric g
-              Nothing -> do
-                -- Var is not a generic type nor type constructor, then throw an error
-                throwError $ "Unknown type variable: " ++ T.unpack name
+            _ ->
+              if Set.member name (icTemporaryTypeConstructors ctx)
+                then
+                  return $ TApplication name [] -- Temporary type constructor, treat as application with no args
+                else do
+                  -- Check if the name is a generic type
+                  case Map.lookup name (icGenericTypes ctx) of
+                    Just g -> do
+                      -- If the name is in generic types, treat it as a generic type
+                      return $ TGeneric g
+                    Nothing -> do
+                      -- Var is not a generic type nor type constructor, then throw an error
+                      throwError $ "Unknown type variable: " ++ T.unpack name
     SMType.TLiteral litAst ->
       return $ convertLiteral litAst
     SMType.TFunction params retType -> do
@@ -260,14 +259,14 @@ convertMType ast =
       let SVariable.Var baseName = unVariable (extractSyntax baseAst)
       ctx <- get
 
-      -- TODO: This check fails with data definition; [Cons<T>: () => Ty<T> /* Ty is not in icTypeConstructors! */]
-      -- case Map.lookup baseName (icTypeConstructors ctx) of
-      --   Just (TypeConstructorInfo k _ _) -> do
-      --     -- If the base is a type constructor, we need to instantiate it with arguments
-      --     when (k /= length argAsts) $
-      --       throwError $
-      --         "Type constructor " ++ T.unpack baseName ++ " expects " ++ show k ++ " arguments, got " ++ show (length argAsts)
-      --   Nothing -> throwError $ "Unknown type variable: " ++ T.unpack baseName
+      case Map.lookup baseName (icTypeConstructors ctx) of
+        Just (TypeConstructorInfo k _ _) -> do
+          -- If the base is a type constructor, we need to instantiate it with arguments
+          when (k /= length argAsts) $
+            throwError $
+              "Type constructor " ++ T.unpack baseName ++ " expects " ++ show k ++ " arguments, got " ++ show (length argAsts)
+        Nothing | Set.member baseName (icTemporaryTypeConstructors ctx) -> pure ()
+        Nothing -> throwError $ "Unknown type variable: " ++ T.unpack baseName
 
       argTypes <- mapM convertMType argAsts
       return $ TApplication baseName argTypes
@@ -311,6 +310,10 @@ inferDecl ast =
       inferPolymorphicVal name typeParams typeAst exprAst
     SDefinition.DataDef dataNameAst constructorDefs -> do
       let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
+
+      -- Add data type to the temporary context
+      modify $ \ctx -> ctx{icTemporaryTypeConstructors = Set.insert dataName (icTemporaryTypeConstructors ctx)}
+
       tcInfos <- mapM (inferConstructorDef dataName) constructorDefs
       unless (null tcInfos) $ do
         -- Combine all constructor infos for this data type
@@ -323,6 +326,12 @@ inferDecl ast =
             (head tcInfos)
             (tail tcInfos)
         modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
+
+      -- Remove temporary context
+      modify $ \ctx ->
+        ctx
+          { icTemporaryTypeConstructors = Set.empty
+          }
     SDefinition.TypeDef aliasAst _params typeAst -> do
       let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
       aliasType <- convertMType typeAst
@@ -440,8 +449,7 @@ inferExpr ast =
       case Map.lookup name (icTypeEnv ctx) of
         Just scheme -> instantiatePolymorphicType scheme
         Nothing -> errorWithPosition ast $ "Unbound variable: " ++ T.unpack name
-    ELiteral litAst -> do
-      return $ convertLiteral litAst
+    ELiteral litAst -> return $ convertLiteral litAst
     ELambda params bodyAst -> do
       savedEnv <- gets icTypeEnv
       paramTypes <- mapM inferLambdaParam params -- possible to introduce new var
@@ -560,7 +568,7 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   -- savedAssumptions <- saveAssumptions
 
   -- Process patterns and generate GADT assumptions
-  zipWithM inferPattern patterns scrutineeTypes
+  zipWithM_ inferPattern patterns scrutineeTypes
 
   -- Infer result with assumptions in scope
   caseResultType <- inferExpr resultExpr
