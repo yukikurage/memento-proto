@@ -7,10 +7,14 @@ val init<T> : (original : T) => Consume<T> := (original : T) =>
   mkConsume(original, (value : T) => value);
 */
 
+val compose<T, U, V> : (f : (value : T) => U, g : (value : U) => V) => (value : T) => V :=
+  (f : (value : T) => U, g : (value : U) => V) =>
+    (value : T) => g(f(value));
+
 val map<T, U1> : (consume : Consume<T>, f : (value : T) => U1) => Consume<U1> :=
   (consume : Consume<T>, f : (value : T) => U1) =>
     switch (consume) [
-      (mkConsume(original, consumer) : Consume<T>) => mkConsume(original, (value : T) => f(consumer(value)))
+      (mkConsume(original, consumer) : Consume<T>) => mkConsume(original, compose(consumer, f))
     ];
 
 /*

@@ -63,6 +63,7 @@ library
     Language.Memento.Syntax.Tag
     Language.Memento.Syntax.Variable
     Language.Memento.TypeSolver
+    Language.Memento.TypeSolver.Assumption
     Language.Memento.TypeSolver.ConstraintGen
     Language.Memento.TypeSolver.Normalize
     Language.Memento.TypeSolver.Solver

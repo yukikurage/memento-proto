@@ -11,7 +11,7 @@ data Option [Some<T> : (value : T) => Option<T>, None<T> : () => Option<T>];
 data PairType [Pair<A> : (first : A, second : A) => PairType<A>];
 
 // List type with two constructors
-data List [Cons<T> : (head : T, tail : List) => List<T>, Nil<T> : () => List<T>];
+data List [Cons<T> : (head : T, tail : List<T>) => List<T>, Nil<T> : () => List<T>];
 
 // Example usage showing multi-constructor pattern matching
 val safe_head<T> : (list : List<T>) => Option<T> := (list : List<T>) =>

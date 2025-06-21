@@ -33,6 +33,7 @@ import qualified Language.Memento.Syntax.Pattern as SPattern
 import qualified Language.Memento.Syntax.Program as SProgram
 import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
+import Language.Memento.TypeSolver.Assumption (calculateGenericBounds)
 import Language.Memento.TypeSolver.Solver (solve)
 import Language.Memento.TypeSolver.Types
 
@@ -93,11 +94,12 @@ inferProgram ast = do
     Right ((), finalCtx) -> do
       let constraints = icConstraints finalCtx
           filteredConstraints = constraints
+          varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
 
       -- traceM $ formatTypeEnv $ icTypeEnv finalCtx
-      let genBndMap = computeGenericBounds $ icAssumptions finalCtx
+      let genBndMap = calculateGenericBounds varMap $ icAssumptions finalCtx
 
-      case solve (Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx) genBndMap filteredConstraints of
+      case solve varMap genBndMap filteredConstraints of
         Success ->
           Right (icTypeEnv finalCtx)
         Contradiction msg ->

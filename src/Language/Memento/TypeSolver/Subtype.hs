@@ -1,6 +1,7 @@
 module Language.Memento.TypeSolver.Subtype where
 
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace)
@@ -10,11 +11,6 @@ import Language.Memento.TypeSolver.Types
 isSubtype :: Type -> Type -> Bool
 isSubtype t1 t2 | containsVar t1 || containsVar t2 = error "isSubtype called with type variables"
 isSubtype t1 t2 = isSubtypeWithVariances Map.empty t1 t2
-
--- Check if t1 <: t2 with generic bounds
-isSubtypeWithBounds :: GenericBoundsMap -> Type -> Type -> Bool
-isSubtypeWithBounds bounds t1 t2 | containsVar t1 || containsVar t2 = error "isSubtypeWithBounds called with type variables"
-isSubtypeWithBounds bounds t1 t2 = isSubtypeWithBounds' Map.empty bounds t1 t2
 
 -- Check subtyping with variance information
 isSubtypeWithVariances :: TypeConstructorVariances -> Type -> Type -> Bool
@@ -87,7 +83,7 @@ isSubtype' varMap (TApplication typeConsName1 args1) (TApplication typeConsName2
       argCheck = case variance of
         Covariant -> isSubtype' varMap arg1 arg2
         Contravariant -> isSubtype' varMap arg2 arg1 -- Flipped!
-        Invariant -> isEquivalent' varMap arg1 arg2
+        Invariant -> isEquivalent' varMap Map.empty arg1 arg2
         Bivariant -> isSubtype' varMap arg1 arg2 || isSubtype' varMap arg2 arg1
      in
       argCheck && checkArgumentsWithVariance variances args1 args2
@@ -95,8 +91,11 @@ isSubtype' varMap (TApplication typeConsName1 args1) (TApplication typeConsName2
 -- Default case
 isSubtype' _ _ _ = False
 
--- Subtype checking with generic bounds
+-- Subtype checking with generic bounds and recursion  limiting
 isSubtypeWithBounds' :: TypeConstructorVariances -> GenericBoundsMap -> Type -> Type -> Bool
+--  limit reached, be more conservative:
+-- If both sides are generics with circular bounds, assume true (equivalence)
+-- Otherwise assume false to break cycles
 -- TUnknown is supertype of everything
 isSubtypeWithBounds' _ _ _ TUnknown = True
 -- TNever is subtype of everything
@@ -129,20 +128,25 @@ isSubtypeWithBounds' variances bounds t1 (TUnion ts) =
 isSubtypeWithBounds' variances bounds t1 (TIntersection ts) = all (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
 isSubtypeWithBounds' variances bounds (TIntersection ts) t2 =
   any (\t -> isSubtypeWithBounds' variances bounds t t2) (Set.toList ts)
--- Generic types with bounds - THIS IS THE KEY PART!
+-- Generic types with bounds
 isSubtypeWithBounds' variances bounds (TGeneric name1) (TGeneric name2)
   | name1 == name2 = True
-  | GenericBounds lower1 upper1 <- lookupGenericBounds name1 bounds
-  , GenericBounds lower2 upper2 <- lookupGenericBounds name2 bounds =
-      isSubtypeWithBounds' variances bounds upper1 lower2
+  | otherwise =
+      let GenericBounds upperOf1 _ = lookupGenericBounds name1 bounds
+          GenericBounds _ lowerOf2 = lookupGenericBounds name2 bounds
+       in elem (TGeneric name2) upperOf1 || elem (TGeneric name1) lowerOf2
 isSubtypeWithBounds' variances bounds (TGeneric name) t2 =
-  -- Generic <: t2 iff upper_bound <: t2
-  case lookupGenericBounds name bounds of
-    GenericBounds _ upper -> isSubtypeWithBounds' variances bounds upper t2
+  let
+    GenericBounds _ lowers = lookupGenericBounds name bounds
+    lowersExceptGeneric = filter (not . containsGeneric) lowers
+   in
+    any (\lower -> isSubtypeWithBounds' variances bounds lower t2) lowersExceptGeneric
 isSubtypeWithBounds' variances bounds t1 (TGeneric name) =
-  -- t1 <: Generic iff t1 <: lower_bound
-  case lookupGenericBounds name bounds of
-    GenericBounds lower _ -> isSubtypeWithBounds' variances bounds t1 lower
+  let
+    GenericBounds upperOfName lowers = lookupGenericBounds name bounds
+    upperOfNameExceptGeneric = filter (not . containsGeneric) upperOfName
+   in
+    any (\upper -> isSubtypeWithBounds' variances bounds t1 upper) upperOfNameExceptGeneric
 isSubtypeWithBounds' varMap bounds (TApplication typeConsName1 args1) (TApplication typeConsName2 args2)
   | typeConsName1 /= typeConsName2 = False
   | otherwise =
@@ -165,9 +169,22 @@ isSubtypeWithBounds' varMap bounds (TApplication typeConsName1 args1) (TApplicat
 -- Default case
 isSubtypeWithBounds' _ _ _ _ = False
 
--- Check if two types are equivalent
-isEquivalent :: Type -> Type -> Bool
-isEquivalent t1 t2 = isSubtype t1 t2 && isSubtype t2 t1
+-- Check if two generics are equivalent based on circular bounds
+-- If A's upper bound contains B and B's upper bound contains A,
+-- and A's lower bound contains B and B's lower bound contains A,
+-- then A and B are equivalent
+-- areEquivalentGenerics :: T.Text -> T.Text -> GenericBoundsMap -> Bool
+-- areEquivalentGenerics name1 name2 bounds =
+--   let GenericBounds lower1 upper1 = lookupGenericBounds name1 bounds
+--       GenericBounds lower2 upper2 = lookupGenericBounds name2 bounds
+--       -- Check if name2 appears in name1's bounds and vice versa
+--       name1InName2Bounds = containsGenericInType name1 lower2 || containsGenericInType name1 upper2
+--       name2InName1Bounds = containsGenericInType name2 lower1 || containsGenericInType name2 upper1
+--    in name1InName2Bounds && name2InName1Bounds
 
-isEquivalent' :: TypeConstructorVariances -> Type -> Type -> Bool
-isEquivalent' variances t1 t2 = isSubtype' variances t1 t2 && isSubtype' variances t2 t1
+isEquivalent' :: TypeConstructorVariances -> GenericBoundsMap -> Type -> Type -> Bool
+isEquivalent' variances bounds t1 t2
+  | containsVar t1 || containsVar t2 = error "isEquivalent called with type variables"
+  | otherwise = isSubtypeWithBounds' variances bounds t1 t2 && isSubtypeWithBounds' variances bounds t2 t1
+
+-- Check if two types are equivalent (bidirectional subtyping)
