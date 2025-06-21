@@ -10,14 +10,10 @@ isSubtype :: Type -> Type -> Bool
 isSubtype t1 t2 | containsVar t1 || containsVar t2 = error "isSubtype called with type variables"
 isSubtype t1 t2 = isSubtypeWithVariances Map.empty t1 t2
 
--- Check if t1 <: t2 with assumptions
-isSubtypeWithAssumptions :: AssumptionSet -> Type -> Type -> Bool
-isSubtypeWithAssumptions assumptions t1 t2 = 
-  let t1' = applyAssumptions assumptions t1
-      t2' = applyAssumptions assumptions t2
-  in if containsVar t1' || containsVar t2'
-     then isSubtypeWithAssumptions' assumptions t1' t2'  -- Still has variables, use assumption-aware version
-     else isSubtype t1' t2'  -- No variables, use standard version
+-- Check if t1 <: t2 with generic bounds
+isSubtypeWithBounds :: GenericBoundsMap -> Type -> Type -> Bool
+isSubtypeWithBounds bounds t1 t2 | containsVar t1 || containsVar t2 = error "isSubtypeWithBounds called with type variables"
+isSubtypeWithBounds bounds t1 t2 = isSubtypeWithBounds' Map.empty bounds t1 t2
 
 -- Check subtyping with variance information
 isSubtypeWithVariances :: TypeConstructorVariances -> Type -> Type -> Bool
@@ -98,65 +94,80 @@ isSubtype' varMap (TApplication typeConsName1 args1) (TApplication typeConsName2
 -- Default case
 isSubtype' _ _ _ = False
 
+-- Subtype checking with generic bounds
+isSubtypeWithBounds' :: TypeConstructorVariances -> GenericBoundsMap -> Type -> Type -> Bool
+-- TUnknown is supertype of everything
+isSubtypeWithBounds' _ _ _ TUnknown = True
+-- TNever is subtype of everything
+isSubtypeWithBounds' _ _ TNever _ = True
+-- Reflexivity
+isSubtypeWithBounds' _ _ t1 t2 | t1 == t2 = True
+-- Base types
+isSubtypeWithBounds' _ _ TNumber TNumber = True
+isSubtypeWithBounds' _ _ TBool TBool = True
+isSubtypeWithBounds' _ _ TString TString = True
+-- Literal types
+isSubtypeWithBounds' _ _ (TLiteral (LNumber _)) TNumber = True
+isSubtypeWithBounds' _ _ (TLiteral (LBool _)) TBool = True
+isSubtypeWithBounds' _ _ (TLiteral (LString _)) TString = True
+-- Decomposition for Boolean
+isSubtypeWithBounds' variances bounds TBool t2 =
+  isSubtypeWithBounds' variances bounds (TLiteral $ LBool True) t2
+    && isSubtypeWithBounds' variances bounds (TLiteral $ LBool False) t2
+-- Function types (contravariant in argument, covariant in result)
+isSubtypeWithBounds' variances bounds (TFunction args1 r1) (TFunction args2 r2) =
+  length args1 == length args2
+    && all (uncurry (flip (isSubtypeWithBounds' variances bounds))) (zip args1 args2)
+    && isSubtypeWithBounds' variances bounds r1 r2
+-- Union types
+isSubtypeWithBounds' variances bounds (TUnion ts) t2 =
+  all (\t -> isSubtypeWithBounds' variances bounds t t2) (Set.toList ts)
+isSubtypeWithBounds' variances bounds t1 (TUnion ts) =
+  any (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
+-- Intersection types
+isSubtypeWithBounds' variances bounds t1 (TIntersection ts) =
+  all (isSubtypeWithBounds' variances bounds t1) (Set.toList ts)
+isSubtypeWithBounds' variances bounds (TIntersection ts) t2 =
+  any (\t -> isSubtypeWithBounds' variances bounds t t2) (Set.toList ts)
+-- Generic types with bounds - THIS IS THE KEY PART!
+isSubtypeWithBounds' _ bounds (TGeneric name1) (TGeneric name2) = name1 == name2
+isSubtypeWithBounds' variances bounds (TGeneric name) t2 =
+  -- Generic <: t2 iff upper_bound <: t2
+  case Map.lookup name bounds of
+    Just (GenericBounds _ upper) -> isSubtypeWithBounds' variances bounds upper t2
+    Nothing -> t2 == TUnknown -- No bounds info, default to old behavior
+isSubtypeWithBounds' variances bounds t1 (TGeneric name) =
+  -- t1 <: Generic iff t1 <: lower_bound
+  case Map.lookup name bounds of
+    Just (GenericBounds lower _) -> isSubtypeWithBounds' variances bounds t1 lower
+    Nothing -> t1 == TNever -- No bounds info, default to old behavior
+    -- Type application with variance-aware subtyping
+isSubtypeWithBounds' varMap bounds (TApplication typeConsName1 args1) (TApplication typeConsName2 args2)
+  | typeConsName1 /= typeConsName2 = False
+  | otherwise =
+      length args1 == length args2 && checkArgumentVariances typeConsName1 args1 args2
+ where
+  checkArgumentVariances :: T.Text -> [Type] -> [Type] -> Bool
+  checkArgumentVariances typeConsName args1 args2 =
+    case Map.lookup typeConsName varMap of
+      Nothing -> error $ "No variance information for type constructor: " ++ T.unpack typeConsName
+      Just variances -> checkArgumentsWithVariance variances args1 args2
+
+  checkArgumentsWithVariance :: [Variance] -> [Type] -> [Type] -> Bool
+  checkArgumentsWithVariance _ [] [] = True
+  checkArgumentsWithVariance (variance : variances) (arg1 : args1) (arg2 : args2) =
+    let argCheck = case variance of
+          Covariant -> isSubtypeWithBounds' varMap bounds arg1 arg2
+          Contravariant -> isSubtypeWithBounds' varMap bounds arg2 arg1
+          Invariant -> isSubtypeWithBounds' varMap bounds arg1 arg2 && isSubtypeWithBounds' varMap bounds arg2 arg1
+          Bivariant -> isSubtypeWithBounds' varMap bounds arg1 arg2 || isSubtypeWithBounds' varMap bounds arg2 arg1
+     in argCheck && checkArgumentsWithVariance variances args1 args2
+-- Default case
+isSubtypeWithBounds' _ _ _ _ = False
+
 -- Check if two types are equivalent
 isEquivalent :: Type -> Type -> Bool
 isEquivalent t1 t2 = isSubtype t1 t2 && isSubtype t2 t1
 
 isEquivalent' :: TypeConstructorVariances -> Type -> Type -> Bool
 isEquivalent' variances t1 t2 = isSubtype' variances t1 t2 && isSubtype' variances t2 t1
-
--- Assumption-aware subtype checking for types that may contain variables
-isSubtypeWithAssumptions' :: AssumptionSet -> Type -> Type -> Bool
--- TUnknown is supertype of everything
-isSubtypeWithAssumptions' _ _ TUnknown = True
--- TNever is subtype of everything
-isSubtypeWithAssumptions' _ TNever _ = True
--- Reflexivity
-isSubtypeWithAssumptions' _ t1 t2 | t1 == t2 = True
--- Type variables - check assumptions first
-isSubtypeWithAssumptions' assumptions (TVar v1) t2 =
-  case Map.lookup v1 assumptions of
-    Just t1' -> isSubtypeWithAssumptions assumptions t1' t2
-    Nothing -> False  -- Unresolved variable, cannot determine subtyping
-isSubtypeWithAssumptions' assumptions t1 (TVar v2) =
-  case Map.lookup v2 assumptions of
-    Just t2' -> isSubtypeWithAssumptions assumptions t1 t2'
-    Nothing -> False  -- Unresolved variable, cannot determine subtyping
--- Base types
-isSubtypeWithAssumptions' _ TNumber TNumber = True
-isSubtypeWithAssumptions' _ TBool TBool = True
-isSubtypeWithAssumptions' _ TString TString = True
--- Literal types
-isSubtypeWithAssumptions' _ (TLiteral (LNumber _)) TNumber = True
-isSubtypeWithAssumptions' _ (TLiteral (LBool _)) TBool = True
-isSubtypeWithAssumptions' _ (TLiteral (LString _)) TString = True
--- Decomposition for Boolean
-isSubtypeWithAssumptions' assumptions TBool t2 = 
-  isSubtypeWithAssumptions' assumptions (TLiteral $ LBool True) t2 && 
-  isSubtypeWithAssumptions' assumptions (TLiteral $ LBool False) t2
--- Function types (contravariant in argument, covariant in result)
-isSubtypeWithAssumptions' assumptions (TFunction args1 r1) (TFunction args2 r2) =
-  length args1 == length args2
-    && all (uncurry (flip (isSubtypeWithAssumptions' assumptions))) (zip args1 args2)
-    && isSubtypeWithAssumptions' assumptions r1 r2
--- Union types
-isSubtypeWithAssumptions' assumptions (TUnion ts) t2 = 
-  all (\t -> isSubtypeWithAssumptions' assumptions t t2) (Set.toList ts)
-isSubtypeWithAssumptions' assumptions t1 (TUnion ts) = 
-  any (isSubtypeWithAssumptions' assumptions t1) (Set.toList ts)
--- Intersection types
-isSubtypeWithAssumptions' assumptions t1 (TIntersection ts) = 
-  all (isSubtypeWithAssumptions' assumptions t1) (Set.toList ts)
-isSubtypeWithAssumptions' assumptions (TIntersection ts) t2 = 
-  any (\t -> isSubtypeWithAssumptions' assumptions t t2) (Set.toList ts)
--- Generic types (polymorphic type parameters)
-isSubtypeWithAssumptions' _ (TGeneric name1) (TGeneric name2) = name1 == name2
-isSubtypeWithAssumptions' _ (TGeneric _) t2 = t2 == TUnknown
-isSubtypeWithAssumptions' _ t1 (TGeneric _) = t1 == TNever
--- Type application - simplified version (no variance checking for now)
-isSubtypeWithAssumptions' assumptions (TApplication name1 args1) (TApplication name2 args2)
-  | name1 == name2 && length args1 == length args2 =
-      all (uncurry (isSubtypeWithAssumptions' assumptions)) (zip args1 args2)
-  | otherwise = False
--- Default case
-isSubtypeWithAssumptions' _ _ _ = False

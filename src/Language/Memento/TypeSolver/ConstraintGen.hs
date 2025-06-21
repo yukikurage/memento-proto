@@ -7,7 +7,7 @@ module Language.Memento.TypeSolver.ConstraintGen (
   typeCheckAST,
 ) where
 
-import Control.Monad (when, zipWithM, zipWithM_)
+import Control.Monad (foldM, unless, when, zipWithM, zipWithM_)
 import Control.Monad.State
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
@@ -54,7 +54,7 @@ data InferContext = InferContext
   , icTypeConstructors :: Map.Map T.Text TypeConstructorInfo
   , icConstructors :: Set.Set T.Text
   , icGenericTypes :: Map.Map T.Text T.Text
-  , icAssumptions :: AssumptionSet -- GADT assumptions for pattern matching
+  , icAssumptions :: AssumptionSet -- Type variable substitutions
   }
   deriving (Show)
 
@@ -84,7 +84,7 @@ inferProgram ast = do
           , icTypeConstructors = Map.empty
           , icConstructors = Set.empty
           , icGenericTypes = Map.empty
-          , icAssumptions = emptyAssumptions
+          , icAssumptions = Set.empty
           }
   case runExcept (runStateT (inferProgramM ast) initialCtx) of
     Left err -> Left err
@@ -92,7 +92,10 @@ inferProgram ast = do
       let constraints = icConstraints finalCtx
           filteredConstraints = constraints
 
-      case solve (Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx) filteredConstraints of
+      -- traceM $ formatTypeEnv $ icTypeEnv finalCtx
+      let genBndMap = computeGenericBounds $ icAssumptions finalCtx
+
+      case solve genBndMap (Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx) filteredConstraints of
         Success ->
           Right (icTypeEnv finalCtx)
         Contradiction msg ->
@@ -177,6 +180,15 @@ addConstructor name = modify $ \ctx -> ctx{icConstructors = Set.insert name (icC
 addGenericType :: T.Text -> T.Text -> InferM ()
 addGenericType name g = modify $ \ctx -> ctx{icGenericTypes = Map.insert name g (icGenericTypes ctx)}
 
+-- | Add assumption for type variable substitution
+addAssumption :: Type -> Type -> InferM ()
+addAssumption left right = modify $ \ctx -> ctx{icAssumptions = Set.insert (Subtype left right) (icAssumptions ctx)}
+
+addEqAssumption :: Type -> Type -> InferM ()
+addEqAssumption t1 t2 = do
+  addAssumption t1 t2
+  addAssumption t2 t1
+
 removeGenericType :: T.Text -> InferM ()
 removeGenericType name = modify $ \ctx -> ctx{icGenericTypes = Map.delete name (icGenericTypes ctx)}
 
@@ -185,9 +197,6 @@ getTypeConstructorVariances = do
   gets (Map.map tciVariance . icTypeConstructors)
 
 -- Assumption management
-addAssumption :: TypeVar -> Type -> InferM ()
-addAssumption var typ = modify $ \ctx -> ctx{icAssumptions = Map.insert var typ (icAssumptions ctx)}
-
 getAssumptions :: InferM AssumptionSet
 getAssumptions = gets icAssumptions
 
@@ -199,28 +208,9 @@ restoreAssumptions assumptions = modify $ \ctx -> ctx{icAssumptions = assumption
 
 -- Generate GADT assumptions by attempting to unify constructor return type with scrutinee type
 generateGADTAssumptions :: Type -> Type -> InferM ()
-generateGADTAssumptions constructorReturnType scrutineeType = do
-  -- For GADT pattern matching, we need to unify the constructor's return type
-  -- with the scrutinee type, generating assumptions for type variables
-  case unifyForAssumptions constructorReturnType scrutineeType of
-    Just assumptions -> mapM_ (uncurry addAssumption) assumptions
-    Nothing -> return ()  -- No assumptions could be generated
- where
-  -- Simple unification for generating assumptions
-  -- Returns assumptions mapping type variables to concrete types
-  unifyForAssumptions :: Type -> Type -> Maybe [(TypeVar, Type)]
-  unifyForAssumptions (TVar v) concrete = Just [(v, concrete)]
-  unifyForAssumptions (TApplication name1 args1) (TApplication name2 args2)
-    | name1 == name2 && length args1 == length args2 = do
-        assumptions <- mapM (uncurry unifyForAssumptions) (zip args1 args2)
-        return $ concat assumptions
-  unifyForAssumptions (TFunction args1 ret1) (TFunction args2 ret2)
-    | length args1 == length args2 = do
-        argAssumptions <- mapM (uncurry unifyForAssumptions) (zip args1 args2)
-        retAssumptions <- unifyForAssumptions ret1 ret2
-        return $ concat argAssumptions ++ retAssumptions
-  unifyForAssumptions t1 t2 | t1 == t2 = Just []
-  unifyForAssumptions _ _ = Nothing
+generateGADTAssumptions (TApplication name1 args1) (TApplication name2 args2)
+  | name1 == name2 = zipWithM_ addEqAssumption args1 args2
+generateGADTAssumptions _ _ = throwError "Cannot generate GADT assumptions for non-application types"
 
 -- ============================================================================
 -- Type Conversion and Instantiation
@@ -268,6 +258,17 @@ convertMType ast =
       return $ mkIntersection convertedTypes
     SMType.TApplication baseAst argAsts -> do
       let SVariable.Var baseName = unVariable (extractSyntax baseAst)
+      ctx <- get
+
+      -- TODO: This check fails with data definition; [Cons<T>: () => Ty<T> /* Ty is not in icTypeConstructors! */]
+      -- case Map.lookup baseName (icTypeConstructors ctx) of
+      --   Just (TypeConstructorInfo k _ _) -> do
+      --     -- If the base is a type constructor, we need to instantiate it with arguments
+      --     when (k /= length argAsts) $
+      --       throwError $
+      --         "Type constructor " ++ T.unpack baseName ++ " expects " ++ show k ++ " arguments, got " ++ show (length argAsts)
+      --   Nothing -> throwError $ "Unknown type variable: " ++ T.unpack baseName
+
       argTypes <- mapM convertMType argAsts
       return $ TApplication baseName argTypes
  where
@@ -289,15 +290,13 @@ instantiatePolymorphicType (TypeScheme vars typ) = do
   let substitution = Map.fromList (zip vars (map TVar freshVars))
   return $ substituteGenerics substitution typ
 
--- For GADT pattern matching, we need to use existential variables
--- that are scoped to the pattern match case
+-- | Instantiate with fresh generics for GADT pattern matching
 instantiatePolymorphicTypeWithScopeAwareness :: TypeScheme -> InferM Type
 instantiatePolymorphicTypeWithScopeAwareness (TypeScheme [] typ) = return typ
 instantiatePolymorphicTypeWithScopeAwareness (TypeScheme vars typ) = do
-  -- Use existential variables instead of regular unification variables
-  -- These are scoped to the current pattern match case
-  freshVars <- mapM (const freshExistentialVar) vars
-  let substitution = Map.fromList (zip vars (map TVar freshVars))
+  -- For GADT pattern matching, we need fresh generics, not type variables
+  freshGenericNames <- mapM freshGenericsWithPrefix vars
+  let substitution = Map.fromList (zip vars (map TGeneric freshGenericNames))
   return $ substituteGenerics substitution typ
 
 -- ============================================================================
@@ -312,7 +311,18 @@ inferDecl ast =
       inferPolymorphicVal name typeParams typeAst exprAst
     SDefinition.DataDef dataNameAst constructorDefs -> do
       let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
-      mapM_ (inferConstructorDef dataName) constructorDefs
+      tcInfos <- mapM (inferConstructorDef dataName) constructorDefs
+      unless (null tcInfos) $ do
+        -- Combine all constructor infos for this data type
+        combinedInfo <-
+          foldM
+            ( \acc info -> case appendTypeConstructorInfo acc info of
+                Just newInfo -> return newInfo
+                Nothing -> throwError $ "Cannot combine type constructor infos: " ++ show acc ++ " and " ++ show info
+            )
+            (head tcInfos)
+            (tail tcInfos)
+        modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
     SDefinition.TypeDef aliasAst _params typeAst -> do
       let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
       aliasType <- convertMType typeAst
@@ -329,12 +339,14 @@ inferDecl ast =
     savedGenericTypes <- gets icGenericTypes
 
     -- id<T> : T => T  // <T> adds generic type to the context
-    mapM_
-      ( \paramName -> do
-          g <- freshGenericsWithPrefix paramName
-          addGenericType paramName g
-      )
-      paramNames
+    freshGenerics <-
+      mapM
+        ( \paramName -> do
+            g <- freshGenericsWithPrefix paramName
+            addGenericType paramName g
+            return g
+        )
+        paramNames
 
     declaredType <- convertMType typeAst
     inferredType <- inferExpr exprAst
@@ -343,7 +355,7 @@ inferDecl ast =
     -- Revert type envs
     modify $ \ctx -> ctx{icTypeEnv = savedEnv, icGenericTypes = savedGenericTypes}
 
-    let typeScheme = generalize declaredType
+    let typeScheme = TypeScheme freshGenerics declaredType
     addVarScheme name typeScheme
 
 -- ============================================================================
@@ -368,12 +380,14 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
   savedGenericTypes <- gets icGenericTypes
 
   -- Add generic types to the context
-  mapM_
-    ( \paramName -> do
-        g <- freshGenericsWithPrefix paramName
-        addGenericType paramName g
-    )
-    constructorTypeParamNames
+  freshGenerics <-
+    mapM
+      ( \paramName -> do
+          g <- freshGenericsWithPrefix paramName
+          addGenericType paramName g
+          return g
+      )
+      constructorTypeParamNames
 
   -- Convert fullType  i.e. `Cons<T>: (x : T, y : number) => Typ<T>  become (Generic T, number) => Typ<Generic T>
   fullType <- convertMType fullTypeAst
@@ -385,25 +399,27 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
       }
 
   case unfoldFunctionType fullType of
-    Just (argTypes, retType)
-      | TApplication dn typeParams <- retType
-      , dn == dataName -> do
+    Just (argTypes, retType) -> do
+      case retType of
+        TApplication dn typeParams | dn == dataName -> do
           let tciKind = length typeParams
-
           varMap <- getTypeConstructorVariances
-
           let tciVariance =
                 [ variance
-                | -- For one generic parameter only e.g. `Cons<T> : (x : T) => Typ<T, number>`, Typ's variances is <Covariant, Invariant>
-                -- number is not a generic type, so it is treated as invariant.
-                TGeneric varName <- typeParams
+                | TGeneric varName <- typeParams
                 , let variance = foldr (combineVariance . analyzeParameterVariance varMap varName) Bivariant argTypes
                 ]
-
-          let typeScheme = TypeScheme constructorTypeParamNames fullType
+          let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme
-
           return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
+        TVar (TypeVar dn) | dn == dataName -> do
+          -- Zero-argument type constructor case
+          let tciKind = 0
+          let tciVariance = []
+          let typeScheme = TypeScheme freshGenerics fullType
+          addVarScheme ctorName typeScheme
+          return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
+        _ -> throwError $ "Constructor return type doesn't match data type name. Expected: " ++ T.unpack dataName ++ ", got: " ++ show retType
     Nothing ->
       throwError $ "Constructor type must be a function, got: " ++ show fullType
  where
@@ -541,7 +557,7 @@ inferExpr ast =
 inferMatchCase :: [Type] -> Type -> (List (AST KPattern, AST KType), AST KExpr) -> InferM ()
 inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   savedEnv <- gets icTypeEnv
-  savedAssumptions <- saveAssumptions
+  -- savedAssumptions <- saveAssumptions
 
   -- Process patterns and generate GADT assumptions
   zipWithM inferPattern patterns scrutineeTypes
@@ -552,24 +568,25 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   -- Check for escaping existentials
   ctx <- get
   let resultVars = typeVars caseResultType
-      assumptionVars = Set.unions (map typeVars (Map.elems (icAssumptions ctx)))
-      escapingVars = Set.intersection resultVars assumptionVars
+  -- assumptionVars = Set.unions (map typeVars (Map.elems (icAssumptions ctx)))
+  -- escapingVars = Set.intersection resultVars assumptionVars
 
-  when (not (Set.null escapingVars)) $
-    throwError $ "Existential types cannot escape their scope: " ++ show (Set.toList escapingVars)
+  -- when (not (Set.null escapingVars)) $
+  --   throwError $
+  --     "Existential types cannot escape their scope: " ++ show (Set.toList escapingVars)
 
   addConstraint $ Subtype caseResultType resultType
 
   -- Restore environment and assumptions after case
+  -- restoreAssumptions savedAssumptions
   modify $ \ctx -> ctx{icTypeEnv = savedEnv}
-  restoreAssumptions savedAssumptions
  where
   inferPattern (patAst, typeAst) scrutineeType = do
     declaredType <- convertMType typeAst
     addConstraint $ Subtype scrutineeType declaredType
-    processPattern patAst declaredType scrutineeType
+    processPattern patAst declaredType
 
-  processPattern patAst expectedType scrutineeType = case unPattern (extractSyntax patAst) of
+  processPattern patAst expectedType = case unPattern (extractSyntax patAst) of
     SPattern.PVar varAst -> do
       let SVariable.Var name = unVariable (extractSyntax varAst)
       addVar name expectedType
@@ -584,8 +601,7 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
       case Map.lookup constructorName (icTypeEnv ctx) of
         Just scheme -> do
           constructorType <- instantiatePolymorphicTypeWithScopeAwareness scheme
-          let (argTypes, returnType) = unfoldFunctionType constructorType
-
+          let (argTypes, returnType) = unfoldFunctionType constructorType -- Constructor's arg & return type
           when (length argPatterns /= length argTypes) $
             error $
               "Constructor "
@@ -596,9 +612,9 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
                 ++ show (length argPatterns)
 
           -- Generate GADT assumptions by unifying constructor return type with scrutinee type
-          generateGADTAssumptions returnType scrutineeType
+          generateGADTAssumptions returnType expectedType
 
-          zipWithM_ (\pat argType -> processPattern pat argType argType) argPatterns argTypes
+          zipWithM_ processPattern argPatterns argTypes
         Nothing ->
           error $ "Unknown constructor: " ++ T.unpack constructorName
 

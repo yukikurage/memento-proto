@@ -19,11 +19,11 @@ import Language.Memento.TypeSolver.Normalize
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
 
-solve :: TypeConstructorVariances -> ConstraintSet -> SolveResult
-solve varMap cs =
+solve :: GenericBoundsMap -> TypeConstructorVariances -> ConstraintSet -> SolveResult
+solve genBndMap varMap cs =
   let normalized = Set.map normalizeConstraint cs
    in -- trace ("solve: constraints = " ++ show (Set.size cs) ++ " constraints: " ++ formatConstraintSet cs)
-      case decomposeConstraintsAll varMap normalized of
+      case decomposeConstraintsAll varMap genBndMap normalized of
         Left err -> Contradiction err
         Right remaining ->
           let substed = substInstancesAsPossible remaining -- Try to substitute instances as much as possible
@@ -36,7 +36,7 @@ solve varMap cs =
                     Left err -> Contradiction err
                     Right () -> Success
                 Just branches ->
-                  let branchResults = map (solve varMap) branches
+                  let branchResults = map (solve genBndMap varMap) branches
                    in if Success `elem` branchResults
                         then Success
                         else Contradiction "Ambiguous branches found"
@@ -44,37 +44,46 @@ solve varMap cs =
 {- | Repeat decomposition while there are still constraints to decompose
 | All remaining may be "BRANCH" or "BOUND" pair (ref: DECOMPOSE.md)
 -}
-decomposeConstraintsAll :: TypeConstructorVariances -> ConstraintSet -> Either String ConstraintSet
-decomposeConstraintsAll varMap cs = do
-  (decomposed, remaining) <- decomposeConstraints varMap cs
+decomposeConstraintsAll :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String ConstraintSet
+decomposeConstraintsAll varMap bounds cs = do
+  (decomposed, remaining) <- decomposeConstraints varMap bounds cs
   if Set.null remaining
     then Right decomposed -- No more constraints to decompose
     else do
-      nextDecomposed <- decomposeConstraintsAll varMap remaining
+      nextDecomposed <- decomposeConstraintsAll varMap bounds remaining
       Right (Set.union decomposed nextDecomposed)
 
 -- Step 1: Decompose constraints
-decomposeConstraints :: TypeConstructorVariances -> ConstraintSet -> Either String (ConstraintSet, ConstraintSet)
-decomposeConstraints varMap cs =
+decomposeConstraints :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String (ConstraintSet, ConstraintSet)
+decomposeConstraints varMap bounds cs =
   fmap (\css -> (Set.unions $ map fst css, Set.unions $ map snd css)) $
-    mapM (decomposeConstraint varMap) $
+    mapM (decomposeConstraint varMap bounds) $
       Set.toList cs
 
 {- | decompose & check clear contradictions (nothing means contradiction)
 | NOTE: DECOMPOSE.md
 | Return type : (branching later, decomposed)
 -}
-decomposeConstraint :: TypeConstructorVariances -> Constraint -> Either String (ConstraintSet, ConstraintSet)
-decomposeConstraint varMap cns = case cns of
+decomposeConstraint :: TypeConstructorVariances -> GenericBoundsMap -> Constraint -> Either String (ConstraintSet, ConstraintSet)
+decomposeConstraint varMap bounds cns = case cns of
   Subtype t1 t2 | t1 == t2 -> Right (Set.empty, Set.empty) -- Same type, no contradiction
   Subtype TNever t2 -> Right (Set.empty, Set.empty) -- Never is a subtype of anything
   Subtype t1 TUnknown -> Right (Set.empty, Set.empty) -- Unknown is a supertype of anything
-  -- If both sides are concrete, check subtypes directly
+  -- If both sides are concrete (no type variables), check subtypes directly
   Subtype t1 t2
     | not (containsVar t1 || containsVar t2) ->
-        if isSubtype t1 t2
+        if isSubtypeWithBounds bounds t1 t2
           then Right (Set.empty, Set.empty) -- No contradiction, return empty set
           else Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ ")"
+  -- Generic bound propagation - THE KEY PART!
+  Subtype (TGeneric name) t2 ->
+    case Map.lookup name bounds of
+      Just (GenericBounds _ upper) -> Right (Set.empty, Set.singleton (Subtype upper t2))
+      Nothing -> Right (Set.singleton cns, Set.empty) -- No bounds info, leave for later
+  Subtype t1 (TGeneric name) ->
+    case Map.lookup name bounds of
+      Just (GenericBounds lower _) -> Right (Set.empty, Set.singleton (Subtype t1 lower))
+      Nothing -> Right (Set.singleton cns, Set.empty) -- No bounds info, leave for later
   Subtype (TUnion ts1) t2 -> Right (Set.empty, Set.fromList [Subtype t t2 | t <- Set.toList ts1]) -- Decompose union
   Subtype t1 (TIntersection ts2) -> Right (Set.empty, Set.fromList [Subtype t1 t | t <- Set.toList ts2]) -- Decompose intersection
   Subtype (TIntersection ts1) t2 -> Right (Set.singleton cns, Set.empty) -- Leave for world branching later

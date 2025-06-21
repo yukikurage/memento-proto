@@ -1,0 +1,7 @@
+// Simple data type test
+
+data Simple [
+  Cons : (x : number) => Simple
+];
+
+val test : Simple := Cons(42);

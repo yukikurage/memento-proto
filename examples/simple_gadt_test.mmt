@@ -1,9 +1,11 @@
-// Simple GADT test without polymorphic constructors first
-data Simple [
-  MkSimple : (value : number) => Simple<number>
+// Simple GADT test to debug bounds computation
+
+data Box [
+  MkBox<T> : (value : T) => Box<T>
 ];
 
-val test : (x : Simple<number>) => number := (x : Simple<number>) =>
-  switch (x) [
-    (MkSimple(value) : Simple<number>) => value
-  ];
+val test : Box<number> := MkBox(42);
+
+val result : number := switch (test) [
+  (MkBox(x) : Box<number>) => x
+];

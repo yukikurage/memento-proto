@@ -1,24 +1,11 @@
-// Test GADT pattern matching with assumption-based type refinement
-// This file tests the new assumption-based GADT pattern matching implementation
+// Test GADT pattern matching
 
-// A simple GADT that represents typed expressions
-data Expr [
-  ELit<T> : (value : T) => Expr<T>,
-  EAdd : (left : Expr<number>, right : Expr<number>) => Expr<number>
+data Typ [
+  Cons<T> : (value : T | bool) => Typ<T | number>
 ];
 
-// This function should work with GADT pattern matching
-// The pattern matching should refine the type parameter T
-val evaluate<T> : (expr : Expr<T>) => T := (expr : Expr<T>) =>
-  switch (expr) [
-    (ELit(value) : Expr<T>) => value,
-    (EAdd(left, right) : Expr<number>) => evaluate(left) + evaluate(right)
-  ];
+val test_expr : Typ<string | number> := Cons(true);
 
-// Test values
-val lit_num : Expr<number> := ELit(42);
-val lit_str : Expr<string> := ELit("hello");
-val add_expr : Expr<number> := EAdd(ELit(10), ELit(32));
-
-// Main function to test evaluation
-val main : (tmp : number) => number := (tmp : number) => evaluate(add_expr);
+val result : string | bool := switch (test_expr) [
+  (Cons(x) : Typ<string | number>) => x
+];

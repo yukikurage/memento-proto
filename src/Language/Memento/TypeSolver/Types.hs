@@ -86,13 +86,7 @@ formatTypeEnv typeSchemeMap =
 monoType :: Type -> TypeScheme
 monoType = TypeScheme []
 
--- Assumptions for GADT pattern matching
--- Maps type variables to their assumed types during pattern matching
-type TypeAssumption = (TypeVar, Type)
-type AssumptionSet = Map.Map TypeVar Type
-
--- Legacy assumption type (keeping for compatibility)
-type Assumption = (T.Text, Type)
+type AssumptionSet = ConstraintSet
 
 -- Variance analysis for type parameters
 data Variance = Covariant | Contravariant | Invariant | Bivariant
@@ -320,28 +314,80 @@ substituteGenerics s (TGeneric name) =
 substituteGenerics s (TApplication base args) =
   TApplication base (map (substituteGenerics s) args)
 
--- Assumption operations
-emptyAssumptions :: AssumptionSet
-emptyAssumptions = Map.empty
+-- Generic bounds computed from assumptions
+data GenericBounds = GenericBounds
+  { gbLower :: Type -- Lower bound: gbLower <: Generic
+  , gbUpper :: Type -- Upper bound: Generic <: gbUpper
+  }
+  deriving (Eq, Show)
 
--- Apply assumptions to a type (substitute TVar with assumed types)
-applyAssumptions :: AssumptionSet -> Type -> Type
-applyAssumptions _ TNumber = TNumber
-applyAssumptions _ TBool = TBool
-applyAssumptions _ TString = TString
-applyAssumptions _ TNever = TNever
-applyAssumptions _ TUnknown = TUnknown
-applyAssumptions _ lit@(TLiteral _) = lit
-applyAssumptions assumptions (TVar v) =
-  case Map.lookup v assumptions of
-    Just t -> t
-    Nothing -> TVar v
-applyAssumptions assumptions (TFunction args ret) = 
-  TFunction (map (applyAssumptions assumptions) args) (applyAssumptions assumptions ret)
-applyAssumptions assumptions (TUnion ts) = 
-  mkUnion (map (applyAssumptions assumptions) (Set.toList ts))
-applyAssumptions assumptions (TIntersection ts) = 
-  mkIntersection (map (applyAssumptions assumptions) (Set.toList ts))
-applyAssumptions _ generic@(TGeneric _) = generic
-applyAssumptions assumptions (TApplication name args) = 
-  TApplication name (map (applyAssumptions assumptions) args)
+type GenericBoundsMap = Map.Map T.Text GenericBounds
+
+-- Compute generic bounds (bounds that generic type is possible to move) from constraints
+-- It's safe to compute bounds that is more general than actual. e. g., actually a <: T <: b but computing as (never <: T <: b) is safe
+-- We should handle nested generics which means,  bool <: (T | number) ~>   bool <: T <: unknown
+computeGenericBounds :: AssumptionSet -> GenericBoundsMap
+computeGenericBounds assumptions = 
+  let constraintList = Set.toList assumptions
+      allGenerics = Set.unions (map extractGenericsFromConstraint constraintList)
+   in Map.fromList [(name, extractBoundsForGeneric name constraintList) | name <- Set.toList allGenerics]
+ where
+  -- Extract all generic names mentioned in a constraint
+  extractGenericsFromConstraint :: Constraint -> Set.Set T.Text
+  extractGenericsFromConstraint (Subtype t1 t2) = Set.union (extractGenericsFromType t1) (extractGenericsFromType t2)
+
+  extractGenericsFromType :: Type -> Set.Set T.Text
+  extractGenericsFromType (TGeneric name) = Set.singleton name
+  extractGenericsFromType (TFunction args ret) = Set.unions (map extractGenericsFromType args) `Set.union` extractGenericsFromType ret
+  extractGenericsFromType (TUnion ts) = Set.unions (map extractGenericsFromType (Set.toList ts))
+  extractGenericsFromType (TIntersection ts) = Set.unions (map extractGenericsFromType (Set.toList ts))
+  extractGenericsFromType (TApplication _ args) = Set.unions (map extractGenericsFromType args)
+  extractGenericsFromType _ = Set.empty
+
+  -- Extract bounds for a specific generic from all constraints
+  extractBoundsForGeneric :: T.Text -> [Constraint] -> GenericBounds
+  extractBoundsForGeneric targetGeneric constraints =
+    let (lowers, uppers) = foldl (extractBoundsFromConstraint targetGeneric) ([], []) constraints
+     in GenericBounds 
+          { gbLower = if null lowers then TNever else mkUnion lowers
+          , gbUpper = if null uppers then TUnknown else mkIntersection uppers
+          }
+
+  -- Extract bounds for a target generic from a single constraint  
+  extractBoundsFromConstraint :: T.Text -> ([Type], [Type]) -> Constraint -> ([Type], [Type])
+  extractBoundsFromConstraint targetGeneric (lowers, uppers) (Subtype t1 t2) =
+    let newLowers = extractLowerBounds targetGeneric t1 t2 ++ lowers
+        newUppers = extractUpperBounds targetGeneric t1 t2 ++ uppers
+     in (newLowers, newUppers)
+
+  -- Extract lower bounds: what must be subtypes of the target generic
+  -- For constraint t1 <: t2, if target appears positively in t2, then parts of t1 give lower bounds
+  extractLowerBounds :: T.Text -> Type -> Type -> [Type]
+  extractLowerBounds target t1 t2
+    | t2 == TGeneric target = [t1]  -- t1 <: target
+    | TUnion ts <- t2, TGeneric target `Set.member` ts = 
+        -- t1 <: (target | other) means t1 <: target (conservatively)
+        [t1]
+    | TIntersection ts <- t2, TGeneric target `Set.member` ts =
+        -- t1 <: (target & other) means t1 <: target 
+        [t1]
+    | TFunction args ret <- t2 =
+        -- For t1 <: (... -> ret), if target appears in ret positively
+        extractLowerBounds target t1 ret
+    | otherwise = []
+
+  -- Extract upper bounds: what the target generic must be a subtype of
+  -- For constraint t1 <: t2, if target appears positively in t1, then parts of t2 give upper bounds  
+  extractUpperBounds :: T.Text -> Type -> Type -> [Type]
+  extractUpperBounds target t1 t2
+    | t1 == TGeneric target = [t2]  -- target <: t2
+    | TUnion ts <- t1, TGeneric target `Set.member` ts =
+        -- (target | other) <: t2 means target <: t2
+        [t2]
+    | TIntersection ts <- t1, TGeneric target `Set.member` ts =
+        -- (target & other) <: t2 means target <: t2  
+        [t2]
+    | TFunction args ret <- t1 =
+        -- For (... -> ret) <: t2, if target appears in ret positively
+        extractUpperBounds target ret t2
+    | otherwise = []
