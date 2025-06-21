@@ -22,26 +22,24 @@ import Language.Memento.TypeSolver.Types
 solve :: TypeConstructorVariances -> ConstraintSet -> SolveResult
 solve varMap cs =
   let normalized = Set.map normalizeConstraint cs
-   in trace
-        ("solve: constraints = " ++ show (Set.size cs) ++ " constraints: " ++ formatConstraintSet cs)
-        case decomposeConstraintsAll varMap normalized of
-          Left err -> Contradiction err
-          Right remaining ->
-            let substed = substInstancesAsPossible remaining -- Try to substitute instances as much as possible
-                bounds = calculateInstanceFromBounds
-             in trace
-                  ("solve: after substitution, constraints = " ++ formatConstraintSet substed)
-                  case branchConstraints varMap substed of
-                    Nothing ->
-                      -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
-                      case checkContradictions (calculatePropagationAll substed) of
-                        Left err -> Contradiction err
-                        Right () -> Success
-                    Just branches ->
-                      let branchResults = map (solve varMap) branches
-                       in if Success `elem` branchResults
-                            then Success
-                            else Contradiction "Ambiguous branches found"
+   in -- trace ("solve: constraints = " ++ show (Set.size cs) ++ " constraints: " ++ formatConstraintSet cs)
+      case decomposeConstraintsAll varMap normalized of
+        Left err -> Contradiction err
+        Right remaining ->
+          let substed = substInstancesAsPossible remaining -- Try to substitute instances as much as possible
+              bounds = calculateInstanceFromBounds
+           in -- trace ("solve: after substitution, constraints = " ++ formatConstraintSet substed)
+              case branchConstraints varMap substed of
+                Nothing ->
+                  -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
+                  case checkContradictions (calculatePropagationAll substed) of
+                    Left err -> Contradiction err
+                    Right () -> Success
+                Just branches ->
+                  let branchResults = map (solve varMap) branches
+                   in if Success `elem` branchResults
+                        then Success
+                        else Contradiction "Ambiguous branches found"
 
 {- | Repeat decomposition while there are still constraints to decompose
 | All remaining may be "BRANCH" or "BOUND" pair (ref: DECOMPOSE.md)

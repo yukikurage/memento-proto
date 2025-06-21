@@ -10,6 +10,15 @@ isSubtype :: Type -> Type -> Bool
 isSubtype t1 t2 | containsVar t1 || containsVar t2 = error "isSubtype called with type variables"
 isSubtype t1 t2 = isSubtypeWithVariances Map.empty t1 t2
 
+-- Check if t1 <: t2 with assumptions
+isSubtypeWithAssumptions :: AssumptionSet -> Type -> Type -> Bool
+isSubtypeWithAssumptions assumptions t1 t2 = 
+  let t1' = applyAssumptions assumptions t1
+      t2' = applyAssumptions assumptions t2
+  in if containsVar t1' || containsVar t2'
+     then isSubtypeWithAssumptions' assumptions t1' t2'  -- Still has variables, use assumption-aware version
+     else isSubtype t1' t2'  -- No variables, use standard version
+
 -- Check subtyping with variance information
 isSubtypeWithVariances :: TypeConstructorVariances -> Type -> Type -> Bool
 isSubtypeWithVariances variances t1 t2 | containsVar t1 || containsVar t2 = error "isSubtypeWithVariances called with type variables"
@@ -95,3 +104,59 @@ isEquivalent t1 t2 = isSubtype t1 t2 && isSubtype t2 t1
 
 isEquivalent' :: TypeConstructorVariances -> Type -> Type -> Bool
 isEquivalent' variances t1 t2 = isSubtype' variances t1 t2 && isSubtype' variances t2 t1
+
+-- Assumption-aware subtype checking for types that may contain variables
+isSubtypeWithAssumptions' :: AssumptionSet -> Type -> Type -> Bool
+-- TUnknown is supertype of everything
+isSubtypeWithAssumptions' _ _ TUnknown = True
+-- TNever is subtype of everything
+isSubtypeWithAssumptions' _ TNever _ = True
+-- Reflexivity
+isSubtypeWithAssumptions' _ t1 t2 | t1 == t2 = True
+-- Type variables - check assumptions first
+isSubtypeWithAssumptions' assumptions (TVar v1) t2 =
+  case Map.lookup v1 assumptions of
+    Just t1' -> isSubtypeWithAssumptions assumptions t1' t2
+    Nothing -> False  -- Unresolved variable, cannot determine subtyping
+isSubtypeWithAssumptions' assumptions t1 (TVar v2) =
+  case Map.lookup v2 assumptions of
+    Just t2' -> isSubtypeWithAssumptions assumptions t1 t2'
+    Nothing -> False  -- Unresolved variable, cannot determine subtyping
+-- Base types
+isSubtypeWithAssumptions' _ TNumber TNumber = True
+isSubtypeWithAssumptions' _ TBool TBool = True
+isSubtypeWithAssumptions' _ TString TString = True
+-- Literal types
+isSubtypeWithAssumptions' _ (TLiteral (LNumber _)) TNumber = True
+isSubtypeWithAssumptions' _ (TLiteral (LBool _)) TBool = True
+isSubtypeWithAssumptions' _ (TLiteral (LString _)) TString = True
+-- Decomposition for Boolean
+isSubtypeWithAssumptions' assumptions TBool t2 = 
+  isSubtypeWithAssumptions' assumptions (TLiteral $ LBool True) t2 && 
+  isSubtypeWithAssumptions' assumptions (TLiteral $ LBool False) t2
+-- Function types (contravariant in argument, covariant in result)
+isSubtypeWithAssumptions' assumptions (TFunction args1 r1) (TFunction args2 r2) =
+  length args1 == length args2
+    && all (uncurry (flip (isSubtypeWithAssumptions' assumptions))) (zip args1 args2)
+    && isSubtypeWithAssumptions' assumptions r1 r2
+-- Union types
+isSubtypeWithAssumptions' assumptions (TUnion ts) t2 = 
+  all (\t -> isSubtypeWithAssumptions' assumptions t t2) (Set.toList ts)
+isSubtypeWithAssumptions' assumptions t1 (TUnion ts) = 
+  any (isSubtypeWithAssumptions' assumptions t1) (Set.toList ts)
+-- Intersection types
+isSubtypeWithAssumptions' assumptions t1 (TIntersection ts) = 
+  all (isSubtypeWithAssumptions' assumptions t1) (Set.toList ts)
+isSubtypeWithAssumptions' assumptions (TIntersection ts) t2 = 
+  any (\t -> isSubtypeWithAssumptions' assumptions t t2) (Set.toList ts)
+-- Generic types (polymorphic type parameters)
+isSubtypeWithAssumptions' _ (TGeneric name1) (TGeneric name2) = name1 == name2
+isSubtypeWithAssumptions' _ (TGeneric _) t2 = t2 == TUnknown
+isSubtypeWithAssumptions' _ t1 (TGeneric _) = t1 == TNever
+-- Type application - simplified version (no variance checking for now)
+isSubtypeWithAssumptions' assumptions (TApplication name1 args1) (TApplication name2 args2)
+  | name1 == name2 && length args1 == length args2 =
+      all (uncurry (isSubtypeWithAssumptions' assumptions)) (zip args1 args2)
+  | otherwise = False
+-- Default case
+isSubtypeWithAssumptions' _ _ _ = False

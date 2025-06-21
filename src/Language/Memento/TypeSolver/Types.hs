@@ -62,9 +62,37 @@ formatType (TApplication base args) =
 data TypeScheme = TypeScheme [T.Text] Type -- forall [a1, a2, ...] . Type
   deriving (Eq, Ord, Show)
 
+formatTypeScheme :: TypeScheme -> (String, String)
+formatTypeScheme (TypeScheme vars t) =
+  let varsStr = if null vars then "" else "<" ++ intercalate ", " (map T.unpack vars) ++ ">"
+      typeStr = formatType t
+   in (varsStr, typeStr)
+
+formatTypeEnv :: Map.Map T.Text TypeScheme -> String
+formatTypeEnv typeSchemeMap =
+  intercalate "\n" $
+    map
+      ( \(k, v) ->
+          let (generics, typeStr) = formatTypeScheme v
+           in T.unpack k
+                ++ " "
+                ++ generics
+                ++ " : "
+                ++ typeStr
+      )
+      (Map.toList typeSchemeMap)
+
 -- Monomorphic type scheme (no quantification)
 monoType :: Type -> TypeScheme
-monoType t = TypeScheme [] t
+monoType = TypeScheme []
+
+-- Assumptions for GADT pattern matching
+-- Maps type variables to their assumed types during pattern matching
+type TypeAssumption = (TypeVar, Type)
+type AssumptionSet = Map.Map TypeVar Type
+
+-- Legacy assumption type (keeping for compatibility)
+type Assumption = (T.Text, Type)
 
 -- Variance analysis for type parameters
 data Variance = Covariant | Contravariant | Invariant | Bivariant
@@ -291,3 +319,29 @@ substituteGenerics s (TGeneric name) =
     Nothing -> TGeneric name
 substituteGenerics s (TApplication base args) =
   TApplication base (map (substituteGenerics s) args)
+
+-- Assumption operations
+emptyAssumptions :: AssumptionSet
+emptyAssumptions = Map.empty
+
+-- Apply assumptions to a type (substitute TVar with assumed types)
+applyAssumptions :: AssumptionSet -> Type -> Type
+applyAssumptions _ TNumber = TNumber
+applyAssumptions _ TBool = TBool
+applyAssumptions _ TString = TString
+applyAssumptions _ TNever = TNever
+applyAssumptions _ TUnknown = TUnknown
+applyAssumptions _ lit@(TLiteral _) = lit
+applyAssumptions assumptions (TVar v) =
+  case Map.lookup v assumptions of
+    Just t -> t
+    Nothing -> TVar v
+applyAssumptions assumptions (TFunction args ret) = 
+  TFunction (map (applyAssumptions assumptions) args) (applyAssumptions assumptions ret)
+applyAssumptions assumptions (TUnion ts) = 
+  mkUnion (map (applyAssumptions assumptions) (Set.toList ts))
+applyAssumptions assumptions (TIntersection ts) = 
+  mkIntersection (map (applyAssumptions assumptions) (Set.toList ts))
+applyAssumptions _ generic@(TGeneric _) = generic
+applyAssumptions assumptions (TApplication name args) = 
+  TApplication name (map (applyAssumptions assumptions) args)

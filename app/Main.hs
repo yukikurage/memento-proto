@@ -10,6 +10,8 @@ import Language.Memento.Parser (parseProgramText)
 import Language.Memento.TypeSolver (typeCheckAST, typeCheckProgram)
 
 -- import Language.Memento.TypeChecker (typeCheckProgram)
+
+import Language.Memento.TypeSolver.Types (formatTypeEnv)
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.FilePath (takeBaseName, takeDirectory, (</>))
@@ -28,7 +30,7 @@ main = do
             Left err -> hPutStrLn stderr $ "Type error: " ++ err
             Right typeEnv -> do
               putStrLn "Type checking successful"
-              putStrLn $ "Type environment: " ++ show typeEnv
+              putStrLn $ "Type environment: \n" ++ formatTypeEnv typeEnv
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
     [inputFile] -> do
@@ -47,7 +49,7 @@ main = do
             Left err -> hPutStrLn stderr $ "Type error: " ++ err
             Right typeEnv -> do
               putStrLn "Type checking successful"
-              putStrLn $ "Type environment: " ++ show typeEnv
+              putStrLn $ "Type environment: \n" ++ formatTypeEnv typeEnv
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
           putStrLn $ "Output written to: " ++ outputFile

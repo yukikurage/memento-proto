@@ -1,0 +1,9 @@
+// Simple GADT test without polymorphic constructors first
+data Simple [
+  MkSimple : (value : number) => Simple<number>
+];
+
+val test : (x : Simple<number>) => number := (x : Simple<number>) =>
+  switch (x) [
+    (MkSimple(value) : Simple<number>) => value
+  ];
