@@ -1,0 +1,18 @@
+// Polymorphic data pattern matching now works!
+// Fixed the existential type variable escape issue
+
+data Box [
+  MkBox<T> : (value : T) => Box<T>
+];
+
+// This now works! Polymorphic pattern matching with proper scope-aware instantiation
+val unbox<T> : (box : Box<T>) => T := (box : Box<T>) =>
+  switch (box) [
+    (MkBox(value) : Box<T>) => value
+  ];
+
+// These work fine - polymorphic data creation
+val box_number : Box<number> := MkBox(42);
+val box_string : Box<string> := MkBox("hello");
+
+val main : (tmp : number) => number := (tmp : number) => unbox(box_number);

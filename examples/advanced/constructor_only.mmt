@@ -1,0 +1,6 @@
+// Test zero-argument constructor without pattern matching
+data Type [A : () => Type, B : () => Type];
+
+// These should work now - creating zero-argument constructors
+val a_val : Type := A();
+val b_val : Type := B();

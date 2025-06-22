@@ -1,0 +1,14 @@
+Let me create a minimal test to check if the type constructor is being stored correctly.
+
+The issue might be that the return type parsing isn't working as expected for zero-argument constructors.
+
+For the constructor definition:
+```
+Cons : (x : number) => Simple
+```
+
+The return type should be parsed as either:
+1. `TVar (TypeVar "Simple")` - if parsed as a simple type variable
+2. `TApplication "Simple" []` - if parsed as a type application with no arguments
+
+Let me check which one it is by examining the existing examples that work.

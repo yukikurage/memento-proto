@@ -27,34 +27,64 @@ library
   exposed-modules:
     Language.Memento.Codegen
     Language.Memento.Codegen.Base
+    Language.Memento.Codegen.BinOps
+    Language.Memento.Codegen.Core
     Language.Memento.Codegen.Definitions
     Language.Memento.Codegen.Expressions
+    Language.Memento.Codegen.Literal
+    Language.Memento.Codegen.Pattern
+    Language.Memento.Codegen.Programs
+    Language.Memento.Data.HCoproduct
+    Language.Memento.Data.HFix
+    Language.Memento.Data.HFunctor
+    Language.Memento.Data.HOp
+    Language.Memento.Data.HProduct
+    Language.Memento.Data.NaturalTransformation
     Language.Memento.Parser
+    Language.Memento.Parser.Class
     Language.Memento.Parser.Core
     Language.Memento.Parser.Definitions
     Language.Memento.Parser.Expressions
+    Language.Memento.Parser.Literal
+    Language.Memento.Parser.Metadata
     Language.Memento.Parser.Patterns
+    Language.Memento.Parser.Programs
     Language.Memento.Parser.Types
+    Language.Memento.Parser.Variables
     Language.Memento.Syntax
     Language.Memento.Syntax.BinOp
     Language.Memento.Syntax.Definition
     Language.Memento.Syntax.Expr
-    Language.Memento.Syntax.Kind
-    Language.Memento.Syntax.Token
-    Language.Memento.Syntax.Type
-    Language.Memento.TypeChecker
-    Language.Memento.TypeChecker.Expressions
-    Language.Memento.TypeChecker.Handle
-    Language.Memento.TypeChecker.Match
-    Language.Memento.TypeChecker.Monad
-    Language.Memento.TypeChecker.Patterns
-    Language.Memento.TypeChecker.Registration
-    Language.Memento.TypeChecker.Solver
-    Language.Memento.TypeChecker.Types
+    Language.Memento.Syntax.Literal
+    Language.Memento.Syntax.Metadata
+    Language.Memento.Syntax.MType
+    Language.Memento.Syntax.Pattern
+    Language.Memento.Syntax.Program
+    Language.Memento.Syntax.Tag
+    Language.Memento.Syntax.Variable
+    Language.Memento.TypeSolver
+    Language.Memento.TypeSolver.Assumption
+    Language.Memento.TypeSolver.ConstraintGen
+    Language.Memento.TypeSolver.Normalize
+    Language.Memento.TypeSolver.Solver
+    Language.Memento.TypeSolver.Subtype
+    Language.Memento.TypeSolver.Types
   other-modules:
     Paths_memento_proto
   hs-source-dirs:
     src
+  default-extensions:
+    DataKinds
+    FlexibleContexts
+    GADTs
+    LambdaCase
+    PolyKinds
+    RankNTypes
+    ScopedTypeVariables
+    TypeApplications
+    TypeOperators
+    TypeFamilies
+  ghc-options: -O2 -flate-specialise -fspecialise-aggressively -fplugin=Polysemy.Plugin
   build-depends:
     aeson,
     base >=4.7 && <5,
@@ -64,6 +94,8 @@ library
     megaparsec,
     mtl,
     parser-combinators,
+    polysemy,
+    polysemy-plugin,
     text
   default-language: Haskell2010
 
@@ -84,6 +116,8 @@ executable memento-proto
     memento-proto,
     mtl,
     parser-combinators,
+    polysemy,
+    polysemy-plugin,
     text
   default-language: Haskell2010
 
@@ -106,5 +140,7 @@ test-suite memento-proto-test
     memento-proto,
     mtl,
     parser-combinators,
+    polysemy,
+    polysemy-plugin,
     text
   default-language: Haskell2010

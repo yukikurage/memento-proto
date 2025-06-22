@@ -36,3 +36,5 @@ dist/js/
 
 # Build script generated files
 *.log 
+
+purescript-dependency-graph

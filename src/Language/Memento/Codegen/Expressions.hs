@@ -1,231 +1,146 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.Codegen.Expressions (
-  generateExpr,
-  generateBinOp,
-  generateClause,
-  generatePattern,
-  generateBindings,
-  partitionHandlerClausesForCodegen, -- Renamed to avoid conflict if Syntax.partitionHandlerClauses is different
-) where
+module Language.Memento.Codegen.Expressions where
 
+import Data.Text (Text)
 import qualified Data.Text as T
-import Language.Memento.Syntax (ArgumentWithMetadata (..), BinOp (..), Clause (..), ClauseWithMetadata (ClauseWithMetadata), Expr (..), ExprWithMetadata (..), HandlerClause (..), HandlerClauseWithMetadata (HandlerClauseWithMetadata), Pattern (..), PatternWithMetadata (..), Type (..), TypeVariable (TypeVariable), TypeVariableWithMetadata (TypeVariableWithMetadata), Variable (..), VariableWithMetadata (..)) -- Added Type for Match
+import GHC.Base (List)
+import Language.Memento.Codegen.BinOps (genBinOp)
+import Language.Memento.Codegen.Core (genConstDef, genConstDefRaw, genVariable)
+import Language.Memento.Codegen.Literal (genLiteral)
+import Language.Memento.Codegen.Pattern (genPattern)
+import Language.Memento.Data.HFix (HFix (unHFix))
+import Language.Memento.Data.HProduct
+import Language.Memento.Syntax (AST, unExpr, unLet)
+import Language.Memento.Syntax.Expr (Expr (..), Let (Let))
+import Language.Memento.Syntax.Tag (KBinOp, KExpr, KLet, KPattern, KType)
 
--- | Helper to partition HandlerClauses (specific to Codegen's needs)
-partitionHandlerClausesForCodegen :: [HandlerClauseWithMetadata] -> ([HandlerClauseWithMetadata], [HandlerClauseWithMetadata])
-partitionHandlerClausesForCodegen clauses = go clauses ([], [])
- where
-  go [] acc = acc
-  go (c : cs) (ops, rets) = case c of
-    HandlerClauseWithMetadata (HandlerClause{}) _ -> go cs (ops ++ [c], rets)
-    HandlerClauseWithMetadata (HandlerReturnClause{}) _ -> go cs (ops, rets ++ [c])
+genExpr :: AST KExpr -> Text
+genExpr astE = case unHFix astE of
+  meta :*: stx -> case unExpr stx of
+    EVar v -> genVariable v
+    ELiteral l -> genLiteral l
+    ELambda ps e -> genLambda ps e
+    EApply e es -> genApply e es
+    EMatch es ps -> genMatch es ps
+    EIf e e1 e2 -> genIf e e1 e2
+    EBinOp op e1 e2 -> genBinOpExpr op e1 e2
+    EBlock lets e -> genBlock lets e
 
-generatePattern :: T.Text -> PatternWithMetadata -> ([T.Text], [(T.Text, T.Text)]) -- (condition, [(varName, valueAccess)])
-generatePattern scrutineeExpr (PatternWithMetadata pattern _) = case pattern of
-  PNumber n ->
-    ([scrutineeExpr, " === ", T.pack (show n)], [])
-  PBool b ->
-    ([scrutineeExpr, " === ", T.pack (if b then "true" else "false")], [])
-  PTuple subPatterns ->
-    let processSubPattern index pat =
-          let elementScrutinee = T.concat [scrutineeExpr, "[", T.pack (show index), "]"]
-           in generatePattern elementScrutinee pat
-
-        results = zipWith processSubPattern [0 ..] subPatterns
-
-        subConditions = map fst results
-        subBindingsList = map snd results
-
-        allBindings = concat subBindingsList
-     in (concat subConditions, allBindings)
-  PConstructor (VariableWithMetadata (Variable consName) _) pattern ->
-    -- Assuming ADT representation: [constructorName, value]
-    let
-      condition = T.concat [scrutineeExpr, "[0] === \"", consName, "\""]
-      (subCondition, bindings) = generatePattern (T.concat [scrutineeExpr, "[1]"]) pattern
-     in
-      ([condition] <> subCondition, bindings)
-  PVar (ArgumentWithMetadata (Variable varName) _) ->
-    ([], [(varName, scrutineeExpr)])
-  PWildcard ->
-    ([], [])
-
-generateBindings :: [(T.Text, T.Text)] -> T.Text
-generateBindings bindings =
-  if null bindings
-    then T.empty
-    else T.unlines (map (\(var, val) -> T.concat [T.pack "    const ", var, T.pack " = ", val, T.pack ";"]) bindings)
-
-generateClause :: String -> ClauseWithMetadata -> ([T.Text], T.Text, T.Text) -- (condition, bindingsJs, branchJs)
-generateClause matchArgName (ClauseWithMetadata (Clause pattern branchExpr) _) =
-  let (condition, bindings) = generatePattern (T.pack matchArgName) pattern
-      bindingsJs = generateBindings bindings
-      branchJs = generateExpr branchExpr -- generateExpr is from this module
-   in (condition, bindingsJs, branchJs)
-
-generateExpr :: ExprWithMetadata -> T.Text
-generateExpr (ExprWithMetadata expr _) = case expr of
-  Var (VariableWithMetadata (Variable name) _) -> T.concat ["ret(", name, ")"]
-  Number n -> T.concat ["ret(", T.pack $ show n, ")"]
-  Bool b -> T.concat ["ret(", T.pack $ if b then "true" else "false", ")"]
-  BinOp op e1 e2 ->
-    let expr1 = generateExpr e1
-        expr2 = generateExpr e2
-     in T.unlines
-          [ "bind(" <> expr1 <> ","
-          , "  (v1) => bind(" <> expr2 <> ","
-          , "    (v2) => ret(v1 " <> generateBinOp op <> " v2)"
-          , "  )"
-          , ")"
-          ]
-  Tuple es ->
-    let exprs = map generateExpr es
-        exprsWithIndex = zip exprs [0 ..]
-        tupleVal idx = "_tuple_val_" <> T.pack (show idx) <> "_"
-        buildTupleExpr :: (T.Text, Int) -> T.Text -> T.Text
-        buildTupleExpr (expr, idx) acc =
-          "bind(" <> expr <> ", (" <> tupleVal idx <> ") =>" <> acc <> ")"
-     in foldr
-          buildTupleExpr
-          ( "ret(["
-              <> T.intercalate
-                ","
-                (map (\(_, idx) -> tupleVal idx) exprsWithIndex)
-              <> "])"
-          )
-          exprsWithIndex
-  If cond then_ else_ ->
-    let condExpr = generateExpr cond
-        thenExpr = generateExpr then_
-        elseExpr = generateExpr else_
-     in T.unlines
-          [ "bind(" <> condExpr <> ","
-          , "  (c) => c"
-          , "    ? " <> thenExpr
-          , "    : " <> elseExpr
-          , ")"
-          ]
-  Lambda pattern _ body ->
-    let lambdaArgName = "_lambda_arg" -- A fixed name for the lambda's argument
-        (conditionJs, bindingsList) = generatePattern lambdaArgName pattern
-        bindingsJs = generateBindings bindingsList
-        bodyJs = generateExpr body
-     in T.unlines
-          [ "ret(function(" <> lambdaArgName <> ") {"
-          , "  if (!(" <> (if null conditionJs then "true" else T.intercalate " && " conditionJs) <> ")) {"
-          , "    throw new Error('Lambda argument pattern mismatch. Value: ' + JSON.stringify(" <> lambdaArgName <> "));"
-          , "  }"
-          , bindingsJs
-          , "  return " <> bodyJs <> ";"
-          , "})"
-          ]
-  HandleApply handler arg ->
-    let handlerExpr = generateExpr handler
-        argExpr = generateExpr arg
-     in T.unlines
-          [ "bind("
-          , handlerExpr
-          , ", (h) => h("
-          , argExpr
-          , "))"
-          ]
-  Apply func arg ->
-    let funcExpr = generateExpr func
-        argExpr = generateExpr arg
-     in T.unlines
-          [ "bind("
-          , argExpr
-          , ", (v) => bind("
-          , funcExpr
-          , ", (f) => f(v)))"
-          ]
-  Match clauses ->
-    -- adtType is Type from Syntax.hs
-    let matchArg = "_matched_val_"
-        generatedClauses = map (generateClause matchArg) clauses
-        -- Use T.pack (show adtType) for error message
-        fallbackLogic = T.concat ["console.error('Non-exhaustive patterns with value: ', ", T.pack matchArg, "); ", "throw new Error('Pattern match failure: Non-exhaustive or malformed ADT value');"]
-     in T.unlines
-          [ T.pack "ret((" <> T.pack matchArg <> T.pack ") => {"
-          , T.pack "  let _result;"
-          , T.intercalate
-              (T.pack " else ")
-              ( map
-                  ( \(conds, bindingsBlock, branchBlock) ->
-                      T.unlines
-                        [ T.concat [T.pack "  if (", if null conds then "true" else T.intercalate " && " conds, T.pack ") {"]
-                        , bindingsBlock
-                        , T.concat [T.pack "    _result = ", branchBlock, T.pack ";"]
-                        , T.pack "  }"
-                        ]
+genLambda :: List (AST KPattern, AST KType) -> AST KExpr -> Text
+genLambda ps e =
+  let
+    genArg :: Int -> Text
+    genArg n = "_ARG_" <> T.pack (show n) <> "_"
+    args = zipWith (\(p, t) n -> genArg n) ps [0 ..]
+   in
+    "("
+      <> T.intercalate ", " args
+      <> ") => {"
+      <> T.unlines
+        ( map
+            (uncurry genConstDef)
+            ( concat $
+                zipWith
+                  ( \(p, t) n ->
+                      snd $ -- 定義だけ取り出す
+                        genPattern p (genArg n) -- _ARG_n_ をもとにしてパターンを解釈
                   )
-                  generatedClauses
-              )
-          , T.pack "  else {"
-          , T.pack "    " <> fallbackLogic
-          , T.pack "  }"
-          , T.pack "  return _result;"
-          , T.pack "})"
-          ]
-  Handle handlerClauses ->
-    -- First arg of Handle is Type, ignored in codegen
-    let (opClauses, returnClauses) = partitionHandlerClausesForCodegen handlerClauses
-        returnClauseJs = case returnClauses of
-          (HandlerClauseWithMetadata (HandlerReturnClause (ArgumentWithMetadata (Variable retVar) _) bodyExpr) _ : _) ->
-            let bodyJs = generateExpr bodyExpr
-             in T.unlines
-                  [ "    const " <> retVar <> " = _handled_val_[1];"
-                  , "    return " <> bodyJs <> ";"
-                  ]
-          _ -> "// Should be caught by type checker: No return clause found\n"
-        opClausesJs =
-          if null opClauses
-            then T.pack "      // No operator clauses\n"
-            else
-              T.concat $
-                map
-                  ( \( HandlerClauseWithMetadata
-                        ( HandlerClause
-                            (TypeVariableWithMetadata (TypeVariable opName) _)
-                            (ArgumentWithMetadata (Variable argVar) _)
-                            (ArgumentWithMetadata (Variable contVar) _)
-                            bodyExpr
-                          )
-                        _
-                      ) ->
-                        let bodyJs = generateExpr bodyExpr
-                         in T.unlines
-                              [ T.concat ["      if (_op_name_ === \"", opName, "\") {"]
-                              , "        const " <> argVar <> " = _op_arg_;"
-                              , "        const " <> contVar <> " = _op_cont_;"
-                              , "        return " <> bodyJs <> ";"
-                              , "      }"
-                              ]
-                  )
-                  opClauses
-        defaultOpCaseJs = "      else {\n        return [\"op\", _op_name_, _op_arg_, _op_cont_];\n      }"
-     in T.unlines
-          [ "ret(function _handle_(_handled_val_){"
-          , "  if (_handled_val_[0] === \"ret\") {"
-          , returnClauseJs
-          , "  } else { // Operation"
-          , "    const _op_name_ = _handled_val_[1];"
-          , "    const _op_arg_ = _handled_val_[2];"
-          , "    const _op_cont_ = (v) => _handle_(_handled_val_[3](v));"
-          , opClausesJs
-          , defaultOpCaseJs
-          , "  }"
-          , "})"
-          ]
+                  ps
+                  [0 ..]
+            )
+        )
+      <> "return "
+      <> genExpr e
+      <> ";}"
 
-generateBinOp :: BinOp -> T.Text
-generateBinOp = \case
-  Add -> "+"
-  Sub -> "-"
-  Mul -> "*"
-  Div -> "/"
-  Eq -> "==="
-  Lt -> "<"
-  Gt -> ">"
+genApply :: AST KExpr -> List (AST KExpr) -> Text
+genApply e es = genExpr e <> "(" <> T.intercalate ", " (map genExpr es) <> ")"
+
+genLet :: AST KPattern -> AST KType -> AST KExpr -> Int -> Text
+genLet p t e n =
+  let
+    -- 一旦 const _ARG_n_ = e としてから、パターンでのスプリットを導入
+    -- すると返ってくる定義は (pred, bindings) で bindings = [(v, _ARG_n_.hoge) ...] みたいな形になる
+    -- 返ってきた bindings が一つの場合は最初の _ARG_n_ は無駄であるのでそれは使わず、パターンに直接 e を流したものを採用する。
+    (pred, bindings) = genPattern p ("_ARG_" <> T.pack (show n) <> "_")
+   in
+    case bindings of
+      [b] ->
+        let
+          (pred', bindings') = genPattern p $ genExpr e
+         in
+          T.unlines $ map (uncurry genConstDef) bindings'
+      _ ->
+        T.unlines $
+          (genConstDefRaw ("_ARG_" <> T.pack (show n) <> "_") (genExpr e))
+            : map (uncurry genConstDef) bindings
+
+genMatch :: List (AST KExpr) -> List (List (AST KPattern, AST KType), AST KExpr) -> Text
+genMatch es clauses =
+  let
+    -- Generate names for each scrutinee expression
+    argName :: Int -> Text
+    argName n = "_ARG_" <> T.pack (show n) <> "_"
+
+    -- const _ARG_n_ = <expr>;
+    scrutineeDefs :: [Text]
+    scrutineeDefs = zipWith (\e n -> genConstDefRaw (argName n) (genExpr e)) es [0 ..]
+
+    -- Generate code for each clause
+    genClause :: ((List (AST KPattern, AST KType), AST KExpr), Int) -> Text
+    genClause ((patsWithTypes, bodyExpr), _) =
+      let
+        -- Extract only patterns, ignore types
+        patterns = map fst patsWithTypes
+
+        -- For each (pattern, scrutinee), get (conds, binds)
+        results = zipWith (\p n -> genPattern p (argName n)) patterns [0 ..]
+        conds = concatMap fst results
+        bindings = concatMap snd results
+
+        condExpr :: Text
+        condExpr = T.intercalate " && " conds
+
+        bindingsCode :: Text
+        bindingsCode = T.unlines $ map (uncurry genConstDef) bindings
+
+        bodyCode = "return " <> genExpr bodyExpr <> ";"
+       in
+        -- Assemble clause depending on whether we have conditions
+
+        if null conds
+          then bindingsCode <> bodyCode
+          else
+            "if (" <> condExpr <> ") {\n" <> bindingsCode <> bodyCode <> "}\n"
+
+    clausesCode = T.concat $ map genClause (zip clauses [0 ..])
+   in
+    "(() => {\n"
+      <> T.unlines scrutineeDefs
+      <> clausesCode
+      <> "throw new Error(\"Non-exhaustive pattern match\");\n" -- fallback
+      <> "})()"
+
+genIf :: AST KExpr -> AST KExpr -> AST KExpr -> Text
+genIf e e1 e2 =
+  "(" <> genExpr e <> " ? " <> genExpr e1 <> " : " <> genExpr e2 <> ")"
+
+genBinOpExpr :: AST KBinOp -> AST KExpr -> AST KExpr -> Text
+genBinOpExpr op e1 e2 =
+  "(" <> genExpr e1 <> " " <> genBinOp op <> " " <> genExpr e2 <> ")"
+
+genBlock :: List (AST KLet) -> AST KExpr -> Text
+genBlock lets lastE =
+  let
+    genedLets =
+      zipWith
+        ( \letAST n -> case unHFix letAST of
+            meta :*: letStx -> case unLet letStx of
+              Let p t e -> genLet p t e n
+        )
+        lets
+        [0 ..]
+   in
+    "(() => {" <> T.unlines genedLets <> "return " <> genExpr lastE <> ";" <> "})()"

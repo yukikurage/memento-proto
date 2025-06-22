@@ -32,18 +32,18 @@ build() {
 # .mmt ファイルを JavaScript にコンパイル
 compile() {
   local input=$1
-  
+
   if [ ! -f "$input" ]; then
     die "ファイル '$input' が見つかりません"
   fi
-  
+
   local output="dist/js/$(basename "${input%.mmt}.js")"
-  
+
   info "コンパイル中: $input -> $output"
   mkdir -p dist/js
-  
+
   stack exec -- memento-proto "$input" || die "$input のコンパイルに失敗しました"
-  
+
   if [ -f "$output" ]; then
     success "$output にコンパイルされました"
   else
@@ -55,11 +55,11 @@ compile() {
 run() {
   local input=$1
   local output="dist/js/$(basename "${input%.mmt}.js")"
-  
+
   if [ ! -f "$output" ]; then
     die "実行ファイル '$output' が見つかりません。先にコンパイルしてください"
   fi
-  
+
   info "実行中: $output"
   node "$output" || die "実行に失敗しました"
   success "実行が完了しました"
@@ -74,14 +74,14 @@ build_and_run() {
 # すべての例をコンパイル
 compile_all_examples() {
   info "examples ディレクトリのすべての .mmt ファイルをコンパイル中..."
-  
+
   local examples_dir="examples"
   mkdir -p dist/js
-  
+
   local count=0
   local failed=0
-  
-  for file in "$examples_dir"/*.mmt; do
+
+  for file in "$examples_dir"/**/*.mmt; do
     if [ -f "$file" ]; then
       info "コンパイル中: $file"
       if stack exec -- memento-proto "$file"; then
@@ -93,7 +93,7 @@ compile_all_examples() {
       fi
     fi
   done
-  
+
   if [ $count -eq 0 ] && [ $failed -eq 0 ]; then
     info "コンパイルするファイルが見つかりませんでした"
   else
@@ -148,4 +148,4 @@ case "$1" in
       echo "  ./build.sh file.mmt  ビルド、コンパイル、実行を連続して行う"
     fi
     ;;
-esac 
+esac

@@ -1,0 +1,11 @@
+// Test pattern matching with constructor symbol generation
+data Unit [Unit : () => Unit];
+data Lazy [mk : (thunk : (x : Unit) => number) => Lazy];
+
+val force : (lazy : Lazy) => number := (lazy : Lazy) =>
+  switch (lazy) [
+    (mk(thunk) : Lazy) => thunk(Unit())
+  ];
+
+val delayed : Lazy := mk((x : Unit) => 42);
+val result : number := force(delayed);

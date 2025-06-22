@@ -1,160 +1,213 @@
-# Memento プログラミング言語
+# Memento Programming Language
 
-Mementoは関数型の特徴を持ち、エフェクトシステムを統合した実験的プログラミング言語です。
+Memento is an experimental functional programming language featuring advanced type inference, polymorphism, and pattern matching.
 
-## 特徴
+## Features
 
-- **関数型パラダイム**: すべてが式であり、ラムダ計算に基づく
-- **型システム**: オプショナルな型注釈と型推論をサポート
-- **エフェクトシステム**: 副作用を追跡・処理する機能
-- **パイプライン演算子**: データフローを直感的に表現
-- **Thunk-based評価**: 遅延評価によるエフェクト処理
+- **Functional Paradigm**: Lambda calculus foundation with strict evaluation
+- **Advanced Type System**: Constraint-based type solver with union/intersection types
+- **Parametric Polymorphism**: Automatic type instantiation and variance analysis
+- **Pattern Matching**: Exhaustivity checking with constructor patterns
+- **Separated Constructor/Type Semantics**: Distinct namespaces for constructors and types
+- **Effect System**: Tracking side effects (ZeroDiv, Throw)
+- **Pipeline Operators**: Intuitive data flow with `|>` and `<|`
 
-## 言語仕様
+## Language Syntax
 
-### 基本構文
+Memento supports both pipeline-style and modern declaration syntax:
 
+### Modern Syntax (Recommended)
+
+```memento
+// Value declarations
+val x : number := 42;
+val message : string := "hello";
+
+// Function definitions  
+val increment : (x : number) => number := (x : number) => x + 1;
+val double : (x : number) => number := (x : number) => x * 2;
+
+// Polymorphic functions
+val identity<T> : (x : T) => T := (x : T) => x;
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C := 
+  (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
+
+// Data declarations with separated constructor/type semantics
+data Some<T> : (value : T) => Option;
+data Cons<T> : (head : T, tail : List) => List;
+data Nil : () => List;
+
+// Pattern matching
+val process : (opt : Option) => number := (opt : Option) =>
+  switch (opt) [
+    (Some(x) : Option) => x,
+    (None() : Option) => 0
+  ];
 ```
-// 値の束縛
-42 |> x  ->                   // xに42を束縛
 
-// 型注釈
-42 |> x : number  ->          // 明示的な型注釈
-true |> flag : bool  ->       // 真偽値型
+### Pipeline Syntax (Legacy)
 
-// ラムダ式（無名関数）
-(x -> x + 1) |> increment ->   // 引数x、本体はx+1
-(n : number -> n * 2) |> double  -> // 型注釈付きラムダ式
-
-// 関数適用
-x |> increment  ->            // incrementにxを適用
-5 |> double |> increment  ->  // 合成関数（5を倍にしてから1増やす）
-// または
-increment <| (double <| 5)  ->  // 関数を右から適用することも可能
-
-// 条件分岐
-if (x > 10) then x else 5  ->  // 条件分岐
-
-...
-```
-
-### 型システム
-
-Mementoは以下の型をサポートしています：
-
-- `number`: 数値型
-- `bool`: 真偽値型
-- 関数型: `(T1 -> T2)`（T1からT2への関数）
-
-型注釈は省略可能で、多くの場合型推論が働きます：
-
-```
-// 型注釈あり
+```memento
+// Value binding
 42 |> x : number ->
 
-// 型注釈なし（numberと推論される）
-10 |> y ->
-
-// 関数の型も推論される
-(n -> n * 2) |> double : (number -> number) ->
+// Lambda expressions
+(x -> x + 1) |> increment ->
+5 |> double |> increment ->
 ```
 
-### エフェクトシステム
+### Type System
 
-Mementoはエフェクトを追跡・処理する機能を持っています。現在サポートされているエフェクト：
+Memento features a sophisticated constraint-based type system:
 
-- `ZeroDiv`: ゼロ除算の可能性
-- `Throw`: 例外エフェクト
+**Primitive Types:**
+- `number`: Numeric type with singleton literal types (`42 : 42`)
+- `bool`: Boolean type (`true : true`, `false : false`) 
+- `string`: String type (`"hello" : "hello"`)
 
-エフェクトは関数を通じて伝播します：
+**Advanced Types:**
+- **Function Types**: `(param : InputType) => OutputType`
+- **Union Types**: `A | B` for alternatives
+- **Intersection Types**: `A & B` for combinations
+- **Generic Types**: `SomeType<T, U>` with variance analysis
+- **Constructor Types**: Separate from type names
 
-```
-// エフェクトを持つ関数
-(a -> a / 2) |> halve ->   // ZeroDivエフェクトを持つ
+**Type Inference:**
+```memento
+// Explicit type annotation
+val x : number := 42;
 
-// エフェクトの伝播
-x |> halve ->            // halveのエフェクトを引き継ぐ
-```
+// Type inference works
+val y := 10;  // Inferred as number
 
-### doオペレーション
-
-`do`キーワードを使って特定のエフェクトを発生させることができます：
-
-```
-// throwエフェクトの発生
-v |> do throw |> x ->
-```
-
-## 使用例
-
-### 基本的な値と演算
-
-```
-// 変数定義
-42 |> x : number ->
-10 |> y : number ->
-
-// 簡単な演算
-x + y |> result ->        // 52
-x * y |> result ->        // 420
+// Polymorphic type inference
+val result := identity(42);  // T inferred as number
 ```
 
-### 関数定義と適用
+### Pattern Matching
 
-```
-// 関数定義
-(n : number -> n + 1) |> increment ->
-(n : number -> n * 2) |> double ->
+Memento supports comprehensive pattern matching with exhaustivity checking:
 
-// 関数適用
-5 |> increment ->        // 6
-5 |> double ->           // 10
+```memento
+// Pattern types
+val example : (input : Option) => number := (input : Option) =>
+  switch (input) [
+    (Some(x) : Option) => x,           // Constructor pattern
+    (None() : Option) => 0             // Zero-argument constructor
+  ];
 
-// 関数合成
-5 |> double |> increment ->  // 11
-// または 
-increment <| (double <| 5) ->  // 11
-```
-
-### 条件分岐
-
-```
-// 条件式
-if (x > y) then x else y |> result ->
-
-// 条件分岐を含む関数
-(val -> if (val > 10) then (val + 10) else (val - 5)) |> conditional ->
+// Nested patterns
+data Pair<A, B> : (first : A, second : B) => Pair;
+val extract : (p : Pair) => number := (p : Pair) =>
+  switch (p) [
+    (Pair(x, y) : Pair) => x + y
+  ];
 ```
 
-### エフェクト処理
+### Separated Constructor/Type Semantics
 
+**Key Innovation**: Constructor names and type names are completely separate:
+
+```memento
+// Constructor 'Some' creates values of type 'Option'
+data Some<T> : (value : T) => Option;
+data None : () => Option;
+
+// Multiple constructors can create the same type
+data Cons<T> : (head : T, tail : List) => List;
+data Nil : () => List;
+
+// Usage
+val my_option : Option := Some(42);      // Constructor: Some, Type: Option
+val my_list : List := Cons(1, Nil());    // Constructors: Cons/Nil, Type: List
 ```
-// エフェクトを持つ関数
-(x ->
-  0 |> do throw |> x
-  9999
-) |> f ->
 
-// エフェクトを発生させる
-0 |> f ->
-```
+## Build and Usage
 
-## ビルドと実行
+### Building the Compiler
 
 ```bash
-# コンパイラのビルド
+# Build the compiler
+stack build
+# OR
 ./build.sh build
 
-# ファイルのコンパイル
-./build.sh compile examples/thunk.mmt
+# Compile a Memento file to JavaScript
+./build.sh compile examples/simple_val.mmt
+# Output: dist/js/simple_val.js
 
-# コンパイル＆実行
-./build.sh examples/thunk.mmt
+# Build, compile, and run in sequence
+./build.sh examples/simple_val.mmt
+
+# Run the compiled JavaScript
+./build.sh run examples/simple_val.mmt
 ```
 
-## 今後の開発予定
+### Example Programs
 
-- より豊富なデータ型（リスト、タプル、レコードなど）
-- カスタムエフェクトの定義
-- より強力な型システム（多相型、代数的データ型）
-- ライブラリシステム
+**Basic Values and Functions:**
+```memento
+val x : number := 42;
+val increment : (n : number) => number := (n : number) => n + 1;
+val result : number := increment(x);  // 43
+```
+
+**Polymorphic Functions:**
+```memento
+val identity<T> : (x : T) => T := (x : T) => x;
+val test_num : number := identity(42);
+val test_str : string := identity("hello");
+```
+
+**Data Types and Pattern Matching:**
+```memento
+data Some<T> : (value : T) => Option;
+data None : () => Option;
+
+val unwrap : (opt : Option) => number := (opt : Option) =>
+  switch (opt) [
+    (Some(x) : Option) => x,
+    (None() : Option) => 0
+  ];
+
+val example : number := unwrap(Some(42));  // 42
+```
+
+## Testing
+
+```bash
+# Run the test suite
+stack test
+
+# Test edge cases
+./build.sh compile examples/edge_cases/simple_poly.mmt
+./build.sh compile examples/edge_cases/working_composition.mmt
+```
+
+## Architecture
+
+Memento is implemented in Haskell with a modular architecture:
+
+- **Parser**: Megaparsec-based parser for `.mmt` files
+- **Type Solver**: Advanced constraint-based type inference system
+- **AST**: Higher-kinded data structures with extensible syntax
+- **Codegen**: JavaScript code generation from AST
+- **Pattern Matching**: Production-level exhaustivity checking
+
+See `CLAUDE.md` for detailed development instructions.
+
+## Current Status
+
+✅ **Completed Features:**
+- Separated constructor/type semantics
+- Parametric polymorphism with type inference  
+- Pattern matching with exhaustivity checking
+- Singleton literal types (`42 : 42`)
+- Union and intersection types
+- Variance analysis for type parameters
+- JavaScript code generation
+
+🚧 **In Progress:**
+- Multi-argument polymorphic function constraint optimization
+- Effect system integration
+- Library system
