@@ -125,20 +125,20 @@ parseValDefinition ::
 parseValDefinition = PClass.parseFix @h $ do
   name <- PClass.parseVariable
   typeParams <- parseTypeParameters
-  -- Try function syntax first: id<T>(x : T) : T := body
+  -- Try function syntax first: id<T>(x : T) : T = body
   (typ, body) <- try parseFunctionSyntax <|> parseNormalSyntax
   _ <- PClass.parseSymbol ";"
   return $ hInject $ ValDef name typeParams typ body
   where
-    -- Normal syntax: val id<T> : (x : T) => T := body
+    -- Normal syntax: val id<T> : (x : T) => T = body
     parseNormalSyntax = do
       PClass.parseSymbol ":"
       typ <- PClass.parseMType
-      PClass.parseSymbol ":="
+      PClass.parseSymbol "="
       body <- PClass.parseExpr
       return (typ, body)
     
-    -- Function syntax: val id<T>(x : T) : T := body
+    -- Function syntax: val id<T>(x : T) : T = body
     parseFunctionSyntax = do
       -- Parse parameter list
       params <- PClass.parseParens $ 
@@ -157,7 +157,7 @@ parseValDefinition = PClass.parseFix @h $ do
       functionType <- buildFunctionType @h params returnType
       
       -- Parse body
-      PClass.parseSymbol ":="
+      PClass.parseSymbol "="
       bodyExpr <- PClass.parseExpr
       
       -- Wrap body in lambda expressions for each parameter
@@ -178,7 +178,7 @@ parseTypeDef ::
 parseTypeDef = PClass.parseFix @h $ do
   name <- PClass.parseVariable
   typeParams <- parseTypeParameters
-  PClass.parseSymbol ":="
+  PClass.parseSymbol "="
   typ <- PClass.parseMType
   _ <- PClass.parseSymbol ";"
   return $ hInject $ TypeDef name typeParams typ
@@ -287,7 +287,9 @@ wrapInLambdas ::
   , MonadParsec s Text m
   ) =>
   [(f KVariable, f KType)] -> f KExpr -> m (f KExpr)
-wrapInLambdas [] body = return body
+wrapInLambdas [] body = do
+  -- For zero-argument functions, create a lambda with empty parameter list
+  PClass.parseFix @h $ return $ hInject $ SExpr.ELambda [] body
 wrapInLambdas params body = do
   -- Convert parameters to pattern/type pairs
   patternParams <- mapM (\(var, typ) -> do

@@ -2,10 +2,10 @@
 data Unit [Unit : () => Unit];
 data Lazy [MkLazy : (thunk : (x : Unit) => number) => Lazy];
 
-val force : (lazy : Lazy) => number := (lazy : Lazy) =>
+val force : (lazy : Lazy) => number = (lazy : Lazy) =>
   switch (lazy) [
     (MkLazy(thunk) : Lazy) => thunk(Unit())
   ];
 
-val delayed : Lazy := MkLazy((x : Unit) => 42);
-val main : (tmp : number) => number := (tmp : number) => force(delayed);
+val delayed : Lazy = MkLazy((x : Unit) => 42);
+val main : (tmp : number) => number = (tmp : number) => force(delayed);

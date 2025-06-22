@@ -2,37 +2,37 @@
 // Demonstrates basic type system features that are actually supported
 
 // Basic literals
-val num : number := 42;
-val str : string := "hello";
-val bool_true : bool := true;
-val bool_false : bool := false;
+val num : number = 42;
+val str : string = "hello";
+val bool_true : bool = true;
+val bool_false : bool = false;
 
 // Functions with basic types
-val double : (n : number) => number := (n : number) => n * 2;
+val double : (n : number) => number = (n : number) => n * 2;
 
 // Pattern matching with basic data types
 data Status [Ok : (value : number) => Status, Error : () => Status];
 
-val get_value : (s : Status) => number := (s : Status) =>
+val get_value : (s : Status) => number = (s : Status) =>
   switch (s) [
     (Ok(value) : Status) => value,
     (Error() : Status) => 0
   ];
 
 // Boolean pattern matching
-val explain_bool : (b : bool) => number := (b : bool) =>
+val explain_bool : (b : bool) => number = (b : bool) =>
   switch (b) [
     (true : bool) => 1,
     (false : bool) => 0
   ];
 
 // Number pattern matching
-val describe_small : (n : number) => number := (n : number) =>
+val describe_small : (n : number) => number = (n : number) =>
   if (n == 0) { 100 } else { 
     if (n == 1) { 101 } else { 102 }
   };
 
 // Test usage
-val test1 : number := get_value(Ok(42));
-val test2 : number := explain_bool(true);
-val test3 : number := describe_small(1);
+val test1 : number = get_value(Ok(42));
+val test2 : number = explain_bool(true);
+val test3 : number = describe_small(1);

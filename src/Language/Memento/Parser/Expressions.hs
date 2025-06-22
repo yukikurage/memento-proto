@@ -213,7 +213,7 @@ parseLet =
       mTyp <- optional $ do
         PClass.parseSymbol ":"
         PClass.parseMType
-      PClass.parseSymbol ":="
+      PClass.parseSymbol "="
       body <- parseExpr @h
       PClass.parseSymbol ";"
       return $ hInject $ Let pat mTyp body

@@ -5,7 +5,7 @@
 data Color [Red : () => Color, Green : () => Color, Blue : () => Color];
 
 // This function covers all cases - should compile
-val describe_color : (c : Color) => number := (c : Color) =>
+val describe_color : (c : Color) => number = (c : Color) =>
   switch (c) [
     (Red() : Color) => 1,
     (Green() : Color) => 2,
@@ -15,7 +15,7 @@ val describe_color : (c : Color) => number := (c : Color) =>
 // Test with nested patterns
 data ComplexColor [RGB : (r : Color, g : Color, b : Color) => ComplexColor];
 
-val is_monochrome : (cc : ComplexColor) => number := (cc : ComplexColor) =>
+val is_monochrome : (cc : ComplexColor) => number = (cc : ComplexColor) =>
   switch (cc) [
     (RGB(Red(), Red(), Red()) : ComplexColor) => 1,
     (RGB(Green(), Green(), Green()) : ComplexColor) => 1,
@@ -23,5 +23,5 @@ val is_monochrome : (cc : ComplexColor) => number := (cc : ComplexColor) =>
   ];
 
 // Example usage
-val test_color : number := describe_color(Red());
-val test_complex : number := is_monochrome(RGB(Blue(), Blue(), Blue()));
+val test_color : number = describe_color(Red());
+val test_complex : number = is_monochrome(RGB(Blue(), Blue(), Blue()));

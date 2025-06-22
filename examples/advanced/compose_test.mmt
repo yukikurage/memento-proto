@@ -1,8 +1,8 @@
 // Test function composition edge case
-val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C := 
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C = 
   (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
 
-val inc : (x : number) => number := (x : number) => x + 1;
-val double : (x : number) => number := (x : number) => x * 2;
+val inc : (x : number) => number = (x : number) => x + 1;
+val double : (x : number) => number = (x : number) => x * 2;
 
-val test : number := compose(double, inc, 5);
+val test : number = compose(double, inc, 5);

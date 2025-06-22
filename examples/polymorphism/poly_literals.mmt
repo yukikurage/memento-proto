@@ -1,8 +1,8 @@
 // Polymorphic functions with literal types (singleton types)
 
-val identity<T> : (x : T) => T := (x : T) => x;
+val identity<T> : (x : T) => T = (x : T) => x;
 
 // Test singleton literal types with polymorphic identity  
-val test_42 : number := identity(42);        // 42 : 42 -> T -> number
-val test_hello : string := identity("hello"); // "hello" : "hello" -> T -> string
-val test_true : bool := identity(true);      // true : true -> T -> bool
+val test_42 : number = identity(42);        // 42 : 42 -> T -> number
+val test_hello : string = identity("hello"); // "hello" : "hello" -> T -> string
+val test_true : bool = identity(true);      // true : true -> T -> bool

@@ -14,16 +14,16 @@ data PairType [Pair<A> : (first : A, second : A) => PairType<A>];
 data List [Cons<T> : (head : T, tail : List<T>) => List<T>, Nil<T> : () => List<T>];
 
 // Example usage showing multi-constructor pattern matching
-val safe_head<T> : (list : List<T>) => Option<T> := (list : List<T>) =>
+val safe_head<T> : (list : List<T>) => Option<T> = (list : List<T>) =>
   switch (list) [
     (Cons(head, tail) : List<T>) => Some(head),
     (Nil() : List<T>) => None()
   ];
 
 // Create some test data
-val my_list : List<number> := Cons(1, Cons(2, Cons(3, Nil())));
-val empty_list : List<number> := Nil();
+val my_list : List<number> = Cons(1, Cons(2, Cons(3, Nil())));
+val empty_list : List<number> = Nil();
 
 // Test the functions
-val first : Option<number> := safe_head(my_list);
-val none : Option<number> := safe_head(empty_list);
+val first : Option<number> = safe_head(my_list);
+val none : Option<number> = safe_head(empty_list);

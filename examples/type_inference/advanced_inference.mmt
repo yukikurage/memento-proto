@@ -1,18 +1,18 @@
 // Advanced type inference examples
 
 // Polymorphic functions with inference
-val id<T> : (x : T) => T := (x) => x;  // parameter type inferred as T
+val id<T> : (x : T) => T = (x) => x;  // parameter type inferred as T
 
-val apply<A, B> : (f : (a : A) => B, x : A) => B :=
+val apply<A, B> : (f : (a : A) => B, x : A) => B =
   (f, x) => f(x);  // parameter types inferred from signature
 
 /*
 // Let polymorphism
 // TODO: Polymorphic let bindings with inference
-val test_poly : number := {
-  let poly_id := (x) => x;  // polymorphic identity
-  let n := poly_id(42);     // instantiated as number
-  let b := poly_id(true);   // instantiated as bool
+val test_poly : number = {
+  let poly_id = (x) => x;  // polymorphic identity
+  let n = poly_id(42);     // instantiated as number
+  let b = poly_id(true);   // instantiated as bool
   n  // returns number
 };
 */
@@ -22,7 +22,7 @@ data List [Nil<T> : () => List<T>, Cons<T> : (head : T, tail : List<T>) => List<
 
 /*
 // TODO: Recursive function
-val length<T> : (list : List<T>) => number :=
+val length<T> : (list : List<T>) => number =
   (list) =>  // list type inferred from signature
     switch (list) [
       (Nil()) => 0,
@@ -32,21 +32,21 @@ val length<T> : (list : List<T>) => number :=
 
 
 // Nested let bindings with inference
-val nested : number := {
-  let outer := 10;
-  let compute := (x) => {  // x : number inferred from usage
-    let inner := x * 2;
-    let add_outer := (y) => y + outer;  // y : number inferred
+val nested : number = {
+  let outer = 10;
+  let compute = (x) => {  // x : number inferred from usage
+    let inner = x * 2;
+    let add_outer = (y) => y + outer;  // y : number inferred
     add_outer(inner)
   };
   compute(5)
 };
 
 // Function composition with full inference
-val compose_poly<A, B, C> : (f : (b : B) => C, g : (a : A) => B) => (x : A) => C :=
+val compose_poly<A, B, C> : (f : (b : B) => C, g : (a : A) => B) => (x : A) => C =
   (f, g) => (x) => f(g(x));  // all parameter types inferred
 
 // Using composed functions
-val inc : (x : number) => number := (x) => x + 1;
-val double : (x : number) => number := (x) => x * 2;
-val inc_then_double : (x : number) => number := compose_poly(double, inc);
+val inc : (x : number) => number = (x) => x + 1;
+val double : (x : number) => number = (x) => x * 2;
+val inc_then_double : (x : number) => number = compose_poly(double, inc);

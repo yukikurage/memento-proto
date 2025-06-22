@@ -277,7 +277,7 @@ instantiatePolymorphicType (TypeScheme [] typ) = return typ
 instantiatePolymorphicType (TypeScheme vars typ) = do
   -- Assign fresh vars to generics.
   -- ex)  id<T> : (v : T) => T     // Definition
-  --      val a : number := id(1)  // Usage <- this time, T is substituted by fresh variable (that will be resolved to "number" by solver)
+  --      val a : number = id(1)  // Usage <- this time, T is substituted by fresh variable (that will be resolved to "number" by solver)
   freshVars <- mapM (const freshVar) vars
   let substitution = Map.fromList (zip vars (map TVar freshVars))
   return $ substituteGenerics substitution typ

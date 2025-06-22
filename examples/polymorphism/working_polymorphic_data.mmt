@@ -6,13 +6,13 @@ data Box [
 ];
 
 // This now works! Polymorphic pattern matching with proper scope-aware instantiation
-val unbox<T> : (box : Box<T>) => T := (box : Box<T>) =>
+val unbox<T> : (box : Box<T>) => T = (box : Box<T>) =>
   switch (box) [
     (MkBox(value) : Box<T>) => value
   ];
 
 // These work fine - polymorphic data creation
-val box_number : Box<number> := MkBox(42);
-val box_string : Box<string> := MkBox("hello");
+val box_number : Box<number> = MkBox(42);
+val box_string : Box<string> = MkBox("hello");
 
-val main : (tmp : number) => number := (tmp : number) => unbox(box_number);
+val main : (tmp : number) => number = (tmp : number) => unbox(box_number);

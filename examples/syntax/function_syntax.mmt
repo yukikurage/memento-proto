@@ -1,16 +1,18 @@
 // Test file for function syntax sugar
 
 // Basic function syntax
-val add(x : number, y : number) : number := x + y;
+val add(x : number, y : number) : number
+  = x + y;
 
 // Polymorphic function syntax
-val identity<T>(x : T) : T := x;
+val identity<T>(x : T) : T = x;
 
 // Function with multiple type parameters
-val compose<A, B, C>(f : (b : B) => C, g : (a : A) => B, x : A) : C := f(g(x));
+val compose<A, B, C>(f : (b : B) => C, g : (a : A) => B, x : A) : C
+  = f(g(x));
 
-// Zero-argument function - use old syntax for now
-val getAnswer : () => number := () => 42;
+// Zero-argument function - new syntax now supported!
+val getAnswer() : number = 42;
 
 // Data with constructor function syntax
 data Option [
@@ -24,11 +26,12 @@ data Pair [
 ];
 
 // Mixed syntax - old and new should both work
-val old_style_function<T> : (x : T) => T := (x : T) => x;
-val new_style_function<T>(x : T) : T := x;
+val old_style_function<T> : (x : T) => T = (x : T) => x;
+val new_style_function<T>(x : T) : T = x;
 
 // Test the functions
-val test_add : number := add(1, 2);
-val test_identity : number := identity(42);
-val test_option : Option<number> := Some(123);
-val test_pair : Pair<number, string> := MkPair(1, "hello");
+val test_add : number = add(1, 2);
+val test_identity : number = identity(42);
+val test_zero_arg : number = getAnswer();
+val test_option : Option<number> = Some(123);
+val test_pair : Pair<number, string> = MkPair(1, "hello");

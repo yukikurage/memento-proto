@@ -1,26 +1,26 @@
 // Edge cases for polymorphic type inference
 
 // Edge Case 1: Multiple type parameters with constraints
-val pair<A, B> : (x : A, y : B) => A := (x : A, y : B) => x;
+val pair<A, B> : (x : A, y : B) => A = (x : A, y : B) => x;
 
 // Edge Case 2: Nested polymorphic function calls
-val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C :=
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C =
   (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
 
-val inc : (x : number) => number := (x : number) => x + 1;
-val double : (x : number) => number := (x : number) => x * 2;
+val inc : (x : number) => number = (x : number) => x + 1;
+val double : (x : number) => number = (x : number) => x * 2;
 
 // This should work: A=number, B=number, C=number
-val inc_then_double : (x : number) => number := (x : number) => compose(double, inc, x);
+val inc_then_double : (x : number) => number = (x : number) => compose(double, inc, x);
 
 // Edge Case 3: Polymorphic function with literal constraints
-val test_literals : number := pair(42, "hello");
+val test_literals : number = pair(42, "hello");
 
 // Edge Case 4: Self-referential type constraints
-val apply<T> : (f : (x : T) => T, x : T) => T := (f : (x : T) => T, x : T) => f(x);
-val test_apply : number := apply(inc, 5);
+val apply<T> : (f : (x : T) => T, x : T) => T = (f : (x : T) => T, x : T) => f(x);
+val test_apply : number = apply(inc, 5);
 
 // Edge Case 5: Higher-order polymorphic functions
-val twice<T> : (f : (x : T) => T, x : T) => T :=
+val twice<T> : (f : (x : T) => T, x : T) => T =
   (f : (x : T) => T, x : T) => f(f(x));
-val test_twice : number := twice(inc, 10);
+val test_twice : number = twice(inc, 10);
