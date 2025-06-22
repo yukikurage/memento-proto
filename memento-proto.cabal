@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+    Language.Memento.Analysis.Hoisting
     Language.Memento.Codegen
     Language.Memento.Codegen.Base
     Language.Memento.Codegen.BinOps

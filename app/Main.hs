@@ -8,6 +8,7 @@ import qualified Data.Text.IO as TIO
 import Language.Memento.Codegen (generateJS)
 import Language.Memento.Parser (parseProgramText)
 import Language.Memento.TypeSolver (typeCheckAST)
+import Language.Memento.Analysis.Hoisting (analyzeHoisting, formatHoistingWarnings)
 
 import Language.Memento.TypeSolver.Types (formatTypeEnv)
 import System.Directory (createDirectoryIfMissing)
@@ -29,6 +30,12 @@ main = do
             Right typeEnv -> do
               putStrLn "Type checking successful"
               putStrLn $ "Type environment: \n" ++ formatTypeEnv typeEnv
+              
+              -- Run hoisting analysis
+              let hoistingAnalysis = analyzeHoisting program
+              putStrLn ""
+              putStrLn (formatHoistingWarnings hoistingAnalysis)
+              
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
     [inputFile] -> do
@@ -48,6 +55,12 @@ main = do
             Right typeEnv -> do
               putStrLn "Type checking successful"
               putStrLn $ "Type environment: \n" ++ formatTypeEnv typeEnv
+              
+              -- Run hoisting analysis
+              let hoistingAnalysis = analyzeHoisting program
+              putStrLn ""
+              putStrLn (formatHoistingWarnings hoistingAnalysis)
+              
           let jsCode = generateJS program
           TIO.writeFile outputFile jsCode
           putStrLn $ "Output written to: " ++ outputFile

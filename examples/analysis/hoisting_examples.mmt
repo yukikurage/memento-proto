@@ -1,0 +1,26 @@
+// Examples demonstrating JavaScript hoisting analysis
+
+// ✅ GOOD: Functions defined before use
+val helper(x : number) : number = x + 1;
+val good_main(n : number) : number = helper(n);
+
+// ❌ BAD: Function called before definition  
+val bad_main(n : number) : number = late_helper(n);
+val late_helper(x : number) : number = x + 1;
+
+// ⚠️  MIXED: Mutual recursion (one direction works, other doesn't)
+val first_func(n : number) : bool = 
+  if(n == 0) { true } else { second_func(n - 1) };  // ERROR: calls second_func before definition
+
+val second_func(n : number) : bool = 
+  if(n == 0) { false } else { first_func(n - 1) };  // OK: first_func already defined
+
+// ✅ RECURSION: Self-recursion is always OK due to JavaScript hoisting
+val factorial(n : number) : number = 
+  if(n == 0) { 1 } else { n * factorial(n - 1) };
+
+// Test cases
+val test_good : number = good_main(5);
+val test_bad : number = bad_main(5);
+val test_mutual : bool = first_func(4);
+val test_factorial : number = factorial(5);
