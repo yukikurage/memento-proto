@@ -1,0 +1,32 @@
+// Examples of recursive and mutually recursive functions
+
+// Direct recursion - factorial
+val factorial(n : number) : number = 
+  if(n == 0) { 1 } else { n * factorial(n - 1) };
+
+// Mutual recursion - even/odd checking
+val isEven(n : number) : bool = 
+  if(n == 0) { true } else { isOdd(n - 1) };
+  
+val isOdd(n : number) : bool = 
+  if(n == 0) { false } else { isEven(n - 1) };
+
+// Recursive data structures
+data List [
+  Cons<T>(head : T, tail : List<T>) : List<T>,
+  Nil<T>() : List<T>
+];
+
+// Recursive function on data structures
+val length<T>(list : List<T>) : number = 
+  switch (list) [
+    (Nil() : List<T>) => 0,
+    (Cons(head, tail) : List<T>) => 1 + length(tail)
+  ];
+
+// Examples and tests
+val test_factorial : number = factorial(5);  // Should be 120
+val test_even : bool = isEven(4);            // Should be true  
+val test_odd : bool = isOdd(3);              // Should be true
+val test_list : List<number> = Cons(1, Cons(2, Cons(3, Nil())));
+val test_length : number = length(test_list); // Should be 3

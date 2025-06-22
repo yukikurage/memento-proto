@@ -76,6 +76,7 @@ type InferM = StateT InferContext (Except String)
 typeCheckAST :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
 typeCheckAST = inferProgram
 
+-- | Two-phase type checking: collect types first, then check bodies
 inferProgram :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
 inferProgram ast = do
   let initialCtx =
@@ -89,24 +90,27 @@ inferProgram ast = do
           , icGenericTypes = Map.empty
           , icAssumptions = Set.empty
           }
-  case runExcept (runStateT (inferProgramM ast) initialCtx) of
-    Left err -> Left err
-    Right ((), finalCtx) -> do
-      let constraints = icConstraints finalCtx
-          filteredConstraints = constraints
-          varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
-
-      case solve varMap (icAssumptions finalCtx) filteredConstraints of
-        Success ->
-          Right (icTypeEnv finalCtx)
-        Contradiction msg ->
-          Left $ "Type error: " ++ msg ++ "\n" ++ formatConstraintSet filteredConstraints ++ "\n" ++ formatBoundsMap (calculateGenericBounds varMap $ icAssumptions finalCtx)
+  
+  case unProgram (extractSyntax ast) of
+    SProgram.Program declAsts -> do
+      -- Phase 1: Collect all definition types and data constructors
+      case runExcept (runStateT (collectAllDefinitionTypes declAsts) initialCtx) of
+        Left err -> Left err
+        Right ((), phaseOneCtx) -> do
+          -- Phase 2: Check each definition body individually
+          checkAllDefinitionBodies declAsts phaseOneCtx
  where
-  -- Process the program
-  inferProgramM :: AST KProgram -> InferM ()
-  inferProgramM ast =
-    case unProgram (extractSyntax ast) of
-      SProgram.Program declAsts -> mapM_ inferDecl declAsts
+  -- Phase 1: Collect all val types and data types into environment
+  collectAllDefinitionTypes :: [AST KDefinition] -> InferM ()
+  collectAllDefinitionTypes declAsts = mapM_ collectDefinitionType declAsts
+  
+  -- Phase 2: Check each definition body with full environment available
+  checkAllDefinitionBodies :: [AST KDefinition] -> InferContext -> Either String (Map.Map T.Text TypeScheme)
+  checkAllDefinitionBodies declAsts baseCtx = do
+    -- Check each definition body individually
+    results <- mapM (checkSingleDefinition baseCtx) declAsts
+    -- Return the final type environment (same as phase 1 since we only check, don't add new types)
+    return (icTypeEnv baseCtx)
 
   -- Check if constraint contains generic types
   constraintContainsGeneric :: Constraint -> Bool
@@ -292,7 +296,136 @@ instantiatePolymorphicTypeWithScopeAwareness (TypeScheme vars typ) = do
   return $ substituteGenerics substitution typ
 
 -- ============================================================================
--- Declaration Inference
+-- Phase 1: Type Collection
+-- ============================================================================
+
+-- | Phase 1: Collect definition type without checking body
+collectDefinitionType :: AST KDefinition -> InferM ()
+collectDefinitionType ast =
+  case unDefinition (extractSyntax ast) of
+    SDefinition.ValDef varAst typeParams typeAst _exprAst -> do
+      -- Extract declared type and add to environment (skip body)
+      let SVariable.Var name = unVariable (extractSyntax varAst)
+      collectPolymorphicValType name typeParams typeAst
+    SDefinition.DataDef dataNameAst constructorDefs -> do
+      -- Data definitions work the same in both phases
+      let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
+      -- Add data type to the temporary context
+      modify $ \ctx -> ctx{icTemporaryTypeConstructors = Set.insert dataName (icTemporaryTypeConstructors ctx)}
+
+      tcInfos <- mapM (inferConstructorDef dataName) constructorDefs
+      unless (null tcInfos) $ do
+        -- Combine all constructor infos for this data type
+        combinedInfo <-
+          foldM
+            ( \acc info -> case appendTypeConstructorInfo acc info of
+                Just newInfo -> return newInfo
+                Nothing -> throwError $ "Cannot combine type constructor infos: " ++ show acc ++ " and " ++ show info
+            )
+            (head tcInfos)
+            (tail tcInfos)
+        modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
+
+      -- Remove temporary context
+      modify $ \ctx ->
+        ctx
+          { icTemporaryTypeConstructors = Set.empty
+          }
+    SDefinition.TypeDef aliasAst _params typeAst -> do
+      -- Type definitions work the same 
+      let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
+      aliasType <- convertMType typeAst
+      addVar aliasName aliasType
+ where
+  collectPolymorphicValType name typeParams typeAst = do
+    let paramNames =
+          [ case unVariable (extractSyntax paramAst) of
+            SVariable.Var paramName -> paramName
+          | paramAst <- typeParams
+          ]
+
+    savedGenericTypes <- gets icGenericTypes
+
+    -- Add type parameters to generic context
+    freshGenerics <-
+      mapM
+        ( \paramName -> do
+            g <- freshGenericsWithPrefix paramName
+            addGenericType paramName g
+            return g
+        )
+        paramNames
+
+    -- Convert declared type and add to environment
+    declaredType <- convertMType typeAst
+    
+    -- Restore generic context
+    modify $ \ctx -> ctx{icGenericTypes = savedGenericTypes}
+
+    let typeScheme = TypeScheme freshGenerics declaredType
+    addVarScheme name typeScheme
+
+-- ============================================================================
+-- Phase 2: Body Checking
+-- ============================================================================
+
+-- | Phase 2: Check a single definition body with full environment available
+checkSingleDefinition :: InferContext -> AST KDefinition -> Either String ()
+checkSingleDefinition baseCtx ast =
+  case unDefinition (extractSyntax ast) of
+    SDefinition.ValDef varAst typeParams typeAst exprAst -> do
+      let SVariable.Var name = unVariable (extractSyntax varAst)
+      checkPolymorphicValBody baseCtx name typeParams typeAst exprAst
+    SDefinition.DataDef _ _ -> 
+      -- Data definitions already processed in phase 1
+      return ()
+    SDefinition.TypeDef _ _ _ -> 
+      -- Type definitions already processed in phase 1  
+      return ()
+ where
+  checkPolymorphicValBody baseCtx name typeParams typeAst exprAst = do
+    -- Create isolated context for this definition
+    let isolatedCtx = baseCtx { icConstraints = Set.empty, icAssumptions = Set.empty }
+    
+    case runExcept (runStateT (checkValBody name typeParams typeAst exprAst) isolatedCtx) of
+      Left err -> Left $ "In definition of " ++ T.unpack name ++ ": " ++ err
+      Right ((), finalCtx) -> do
+        let constraints = icConstraints finalCtx
+            varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
+        
+        case solve varMap (icAssumptions finalCtx) constraints of
+          Success -> return ()
+          Contradiction msg -> 
+            Left $ "Type error in " ++ T.unpack name ++ ": " ++ msg ++ "\n" ++ formatConstraintSet constraints
+
+  checkValBody name typeParams typeAst exprAst = do
+    let paramNames =
+          [ case unVariable (extractSyntax paramAst) of
+            SVariable.Var paramName -> paramName
+          | paramAst <- typeParams
+          ]
+
+    savedGenericTypes <- gets icGenericTypes
+
+    -- Add type parameters to context
+    freshGenerics <-
+      mapM
+        ( \paramName -> do
+            g <- freshGenericsWithPrefix paramName
+            addGenericType paramName g
+            return g
+        )
+        paramNames
+
+    declaredType <- convertMType typeAst
+    inferredType <- inferExpr exprAst
+    addConstraint $ Subtype inferredType declaredType
+
+    -- Restore generic context
+    modify $ \ctx -> ctx{icGenericTypes = savedGenericTypes}
+
+-- ============================================================================
+-- Legacy Declaration Inference (Unused)
 -- ============================================================================
 
 inferDecl :: AST KDefinition -> InferM ()
