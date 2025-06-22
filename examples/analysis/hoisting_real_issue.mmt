@@ -1,0 +1,14 @@
+// Examples that should trigger hoisting warnings
+
+// ❌ This should cause ERROR: top-level call before definition
+val result1 : number = late_function(42);
+val late_function(x : number) : number = x + 1;
+
+// ✅ This should be OK: function defined before call
+val early_function(x : number) : number = x * 2;
+val result2 : number = early_function(21);
+
+// ❌ This should cause ERROR: transitive dependency
+val result3 : number = caller_func(10);
+val caller_func(x : number) : number = target_func(x);
+val target_func(x : number) : number = x + 5;

@@ -1,0 +1,10 @@
+// Test case: call between function definitions
+
+val first_func(n : number) : bool =
+  if(n == 0) { true } else { second_func(n - 1) };
+
+// ❌ This SHOULD cause ERROR: calls first_func, which calls second_func before it's defined
+val x : bool = first_func(5);
+
+val second_func(n : number) : bool =
+  if(n == 0) { false } else { first_func(n - 1) };

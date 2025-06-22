@@ -1,25 +1,25 @@
 // Examples demonstrating JavaScript hoisting analysis
 
-// ✅ GOOD: Functions defined before use
+// ✅ GOOD: Function definitions (all calls are deferred in function bodies)
 val helper(x : number) : number = x + 1;
 val good_main(n : number) : number = helper(n);
 
-// ❌ BAD: Function called before definition  
+// ✅ GOOD: Function calls inside function bodies are deferred, safe due to hoisting
 val bad_main(n : number) : number = late_helper(n);
 val late_helper(x : number) : number = x + 1;
 
-// ⚠️  MIXED: Mutual recursion (one direction works, other doesn't)
-val first_func(n : number) : bool = 
-  if(n == 0) { true } else { second_func(n - 1) };  // ERROR: calls second_func before definition
+// ✅ GOOD: Mutual recursion works fine - calls are in function bodies (deferred)
+val first_func(n : number) : bool =
+  if(n == 0) { true } else { second_func(n - 1) };  // OK: deferred call
 
-val second_func(n : number) : bool = 
-  if(n == 0) { false } else { first_func(n - 1) };  // OK: first_func already defined
+val second_func(n : number) : bool =
+  if(n == 0) { false } else { first_func(n - 1) };  // OK: deferred call
 
-// ✅ RECURSION: Self-recursion is always OK due to JavaScript hoisting
-val factorial(n : number) : number = 
+// ✅ GOOD: Self-recursion is always OK due to JavaScript hoisting
+val factorial(n : number) : number =
   if(n == 0) { 1 } else { n * factorial(n - 1) };
 
-// Test cases
+// ✅ GOOD: All these are calls to already-defined functions
 val test_good : number = good_main(5);
 val test_bad : number = bad_main(5);
 val test_mutual : bool = first_func(4);

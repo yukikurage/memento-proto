@@ -1,0 +1,9 @@
+// Test case for lambda hoisting bug
+
+val callback_receiver(cb : (x : number) => number, value : number) : number =
+  cb(value);
+
+val callback_passing : number =
+  callback_receiver((x : number) => x + callback(), 5);
+
+val callback : () => number = () => 42;

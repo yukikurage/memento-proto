@@ -1,0 +1,10 @@
+// Test case for transitive hoisting bug
+
+val first_func(n : number) : bool =
+  if(n == 0) { true } else { second_func(n - 1) };
+
+// ❌ This should cause ERROR: calls first_func, which transitively calls second_func before it's defined
+val x : bool = first_func(5);
+
+val second_func(n : number) : bool =
+  if(n == 0) { false } else { first_func(n - 1) };

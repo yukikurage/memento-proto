@@ -52,7 +52,7 @@ data WarningSeverity
 -- | Result of hoisting analysis
 data HoistingAnalysis = HoistingAnalysis
   { haWarnings :: [HoistingWarning]
-  , haDependencyGraph :: Map.Map T.Text (Set.Set T.Text)  -- function -> functions it calls
+  , haTopLevelCalls :: [(T.Text, Int)]  -- Functions called at top-level with call positions
   , haDefinitionOrder :: [T.Text]  -- Order functions are defined
   } deriving (Show)
 
@@ -66,11 +66,12 @@ analyzeHoisting ast =
   case unProgram (extractSyntax ast) of
     SProgram.Program definitions -> 
       let definitionOrder = extractDefinitionOrder definitions
-          dependencyGraph = buildDependencyGraph definitions
-          warnings = detectHoistingIssues definitionOrder dependencyGraph
+          topLevelCalls = findTopLevelCalls definitions
+          functionDeps = buildFunctionDependencies definitions
+          warnings = detectTransitiveHoistingIssues definitionOrder topLevelCalls functionDeps
       in HoistingAnalysis
           { haWarnings = warnings
-          , haDependencyGraph = dependencyGraph  
+          , haTopLevelCalls = topLevelCalls  
           , haDefinitionOrder = definitionOrder
           }
 
@@ -95,56 +96,119 @@ extractDefinitionOrder definitions =
       _ -> Nothing  -- Skip data and type definitions
 
 -- ============================================================================
--- Dependency Graph Construction
+-- Top-Level Call Analysis
 -- ============================================================================
 
--- | Build dependency graph: function -> set of functions it calls
-buildDependencyGraph :: [AST KDefinition] -> Map.Map T.Text (Set.Set T.Text)
-buildDependencyGraph definitions =
+-- | Find all top-level calls with their calling definition positions
+findTopLevelCalls :: [AST KDefinition] -> [(T.Text, Int)]
+findTopLevelCalls definitions =
+  concat 
+    [ [ (calledFunc, pos) 
+      | calledFunc <- Set.toList (findTopLevelCallsInDefinition def) ]
+    | (def, pos) <- zip definitions [0..]
+    ]
+
+-- | Build function dependency graph: function -> functions it calls directly
+buildFunctionDependencies :: [AST KDefinition] -> Map.Map T.Text (Set.Set T.Text)
+buildFunctionDependencies definitions =
   Map.fromList 
-    [ (funcName, findFunctionCalls bodyAst)
+    [ (funcName, findFunctionCallsInBody bodyAst)
     | def <- definitions
-    , Just (funcName, bodyAst) <- [extractFunctionBody def]
+    , Just (funcName, bodyAst) <- [extractFunctionDefinition def]
     ]
  where
-  extractFunctionBody :: AST KDefinition -> Maybe (T.Text, AST KExpr)
-  extractFunctionBody ast =
+  extractFunctionDefinition :: AST KDefinition -> Maybe (T.Text, AST KExpr)
+  extractFunctionDefinition ast =
     case unDefinition (extractSyntax ast) of
-      SDefinition.ValDef varAst _ _ bodyAst -> 
+      SDefinition.ValDef varAst _typeParams _mType bodyAst -> 
         let SVariable.Var name = unVariable (extractSyntax varAst)
-        in Just (name, bodyAst)
-      _ -> Nothing  -- Skip data and type definitions
+        in case unExpr (extractSyntax bodyAst) of
+          SExpr.ELambda _ _ -> Just (name, bodyAst)  -- Function definition
+          _ -> Nothing  -- Value definition
+      _ -> Nothing  -- Data/Type definitions
 
--- | Find all function calls in an expression
-findFunctionCalls :: AST KExpr -> Set.Set T.Text
-findFunctionCalls ast = 
+  findFunctionCallsInBody :: AST KExpr -> Set.Set T.Text  
+  findFunctionCallsInBody ast = 
+    case unExpr (extractSyntax ast) of
+      SExpr.ELambda _params bodyAst -> findAllCalls bodyAst
+      _ -> Set.empty
+
+  findAllCalls :: AST KExpr -> Set.Set T.Text
+  findAllCalls ast = 
+    case unExpr (extractSyntax ast) of
+      SExpr.EVar varAst ->
+        let SVariable.Var name = unVariable (extractSyntax varAst)
+        in Set.singleton name
+      SExpr.EApply funcAst argAsts ->
+        let funcCalls = findAllCalls funcAst
+            argCalls = Set.unions (map findAllCalls argAsts)
+        in Set.union funcCalls argCalls
+      SExpr.ELambda _params bodyAst ->
+        findAllCalls bodyAst
+      SExpr.EIf condAst thenAst elseAst ->
+        Set.unions [findAllCalls condAst, findAllCalls thenAst, findAllCalls elseAst]
+      SExpr.EBinOp _opAst leftAst rightAst ->
+        Set.union (findAllCalls leftAst) (findAllCalls rightAst)
+      SExpr.EBlock letAsts exprAst ->
+        let letCalls = Set.unions (map findLetCallsAll letAsts)
+            exprCalls = findAllCalls exprAst
+        in Set.union letCalls exprCalls
+      SExpr.EMatch scrutineeAsts cases ->
+        let scrutineeCalls = Set.unions (map findAllCalls scrutineeAsts)
+            caseCalls = Set.unions [findAllCalls caseExpr | (_, caseExpr) <- cases]
+        in Set.union scrutineeCalls caseCalls
+      SExpr.ELiteral _ ->
+        Set.empty
+   where
+    findLetCallsAll letAst = 
+      case unLet (extractSyntax letAst) of
+        SExpr.Let _pat _mType exprAst -> findAllCalls exprAst
+
+findTopLevelCallsInDefinition :: AST KDefinition -> Set.Set T.Text
+findTopLevelCallsInDefinition ast =
+    case unDefinition (extractSyntax ast) of
+      SDefinition.ValDef _varAst _typeParams _mType bodyAst -> 
+        -- Check if this is a function definition by examining the body
+        -- If body is a lambda, it's a function definition (calls are deferred)
+        -- If body is not a lambda, it's a value definition (calls execute immediately)
+        case unExpr (extractSyntax bodyAst) of
+          SExpr.ELambda _ _ -> Set.empty  -- Function definition - calls are deferred
+          _ -> findImmediateCalls bodyAst  -- Value definition - calls execute immediately
+      _ -> Set.empty  -- Data definitions don't have calls
+
+-- | Find function calls that execute immediately (not deferred in lambda bodies)
+findImmediateCalls :: AST KExpr -> Set.Set T.Text
+findImmediateCalls ast = 
   case unExpr (extractSyntax ast) of
     SExpr.EVar varAst ->
-      let SVariable.Var name = unVariable (extractSyntax varAst)
-      in Set.singleton name
+      -- Variable reference alone is not a call
+      Set.empty
     
     SExpr.EApply funcAst argAsts ->
-      let funcCalls = findFunctionCalls funcAst
-          argCalls = Set.unions (map findFunctionCalls argAsts)
+      -- Function application is an immediate call
+      let funcCalls = findFunctionCallsInExpr funcAst
+          argCalls = Set.unions (map findArgumentCalls argAsts)
       in Set.union funcCalls argCalls
     
-    SExpr.ELambda _params bodyAst ->
-      findFunctionCalls bodyAst
+    SExpr.ELambda _params _bodyAst ->
+      -- Lambda body calls are deferred, not immediate
+      -- Exception: lambdas passed as arguments to immediate calls (handled in EApply)
+      Set.empty
     
     SExpr.EIf condAst thenAst elseAst ->
-      Set.unions [findFunctionCalls condAst, findFunctionCalls thenAst, findFunctionCalls elseAst]
+      Set.unions [findImmediateCalls condAst, findImmediateCalls thenAst, findImmediateCalls elseAst]
     
     SExpr.EBinOp _opAst leftAst rightAst ->
-      Set.union (findFunctionCalls leftAst) (findFunctionCalls rightAst)
+      Set.union (findImmediateCalls leftAst) (findImmediateCalls rightAst)
     
     SExpr.EBlock letAsts exprAst ->
       let letCalls = Set.unions (map findLetCalls letAsts)
-          exprCalls = findFunctionCalls exprAst
+          exprCalls = findImmediateCalls exprAst
       in Set.union letCalls exprCalls
     
     SExpr.EMatch scrutineeAsts cases ->
-      let scrutineeCalls = Set.unions (map findFunctionCalls scrutineeAsts)
-          caseCalls = Set.unions [findFunctionCalls caseExpr | (_, caseExpr) <- cases]
+      let scrutineeCalls = Set.unions (map findImmediateCalls scrutineeAsts)
+          caseCalls = Set.unions [findImmediateCalls caseExpr | (_, caseExpr) <- cases]
       in Set.union scrutineeCalls caseCalls
     
     SExpr.ELiteral _ ->
@@ -152,43 +216,68 @@ findFunctionCalls ast =
  where
   findLetCalls letAst = 
     case unLet (extractSyntax letAst) of
-      SExpr.Let _pat _mType exprAst -> findFunctionCalls exprAst
+      SExpr.Let _pat _mType exprAst -> findImmediateCalls exprAst
+
+-- | Extract function name from function call expression
+findFunctionCallsInExpr :: AST KExpr -> Set.Set T.Text
+findFunctionCallsInExpr ast =
+  case unExpr (extractSyntax ast) of
+    SExpr.EVar varAst ->
+      let SVariable.Var name = unVariable (extractSyntax varAst)
+      in Set.singleton name
+    _ -> Set.empty  -- Only direct variable references are function calls
+
+-- | Find calls in function arguments (lambdas might execute immediately)
+findArgumentCalls :: AST KExpr -> Set.Set T.Text
+findArgumentCalls ast =
+  case unExpr (extractSyntax ast) of
+    SExpr.ELambda _params bodyAst ->
+      -- Lambda passed as argument might execute immediately
+      findImmediateCalls bodyAst
+    _ ->
+      -- Non-lambda arguments: analyze normally
+      findImmediateCalls ast
 
 -- ============================================================================
 -- Hoisting Issue Detection
 -- ============================================================================
 
--- | Detect hoisting issues based on definition order and dependencies
-detectHoistingIssues :: [T.Text] -> Map.Map T.Text (Set.Set T.Text) -> [HoistingWarning]
-detectHoistingIssues definitionOrder dependencyGraph =
+-- | Detect transitive hoisting issues
+detectTransitiveHoistingIssues :: [T.Text] -> [(T.Text, Int)] -> Map.Map T.Text (Set.Set T.Text) -> [HoistingWarning]
+detectTransitiveHoistingIssues definitionOrder topLevelCalls functionDeps =
   let functionPositions = Map.fromList (zip definitionOrder [0..])
-  in concat 
-      [ detectCallBeforeDefinition funcName calls functionPositions
-      | (funcName, calls) <- Map.toList dependencyGraph
+  in concat
+      [ detectTransitiveIssuesForCall calledFunc callPos functionPositions functionDeps
+      | (calledFunc, callPos) <- topLevelCalls
       ]
  where
-  detectCallBeforeDefinition :: T.Text -> Set.Set T.Text -> Map.Map T.Text Int -> [HoistingWarning]
-  detectCallBeforeDefinition caller calls positions =
-    [ HoistingWarning
-        { hwFunction = caller
-        , hwCalls = callee
-        , hwIssue = CallBeforeDefinition
-        , hwSeverity = determineSeverity caller callee positions
-        }
-    | callee <- Set.toList calls
-    , isCallBeforeDefinition caller callee positions
-    ]
-  
-  isCallBeforeDefinition :: T.Text -> T.Text -> Map.Map T.Text Int -> Bool
-  isCallBeforeDefinition caller callee positions =
-    case (Map.lookup caller positions, Map.lookup callee positions) of
-      (Just callerPos, Just calleePos) -> callerPos < calleePos
-      _ -> False  -- If function not found, assume it's external
-  
-  determineSeverity :: T.Text -> T.Text -> Map.Map T.Text Int -> WarningSeverity
-  determineSeverity caller callee _positions
-    | caller == callee = Warning  -- Self-recursion is fine due to hoisting
-    | otherwise = Error          -- Call before definition will fail
+  detectTransitiveIssuesForCall :: T.Text -> Int -> Map.Map T.Text Int -> Map.Map T.Text (Set.Set T.Text) -> [HoistingWarning]
+  detectTransitiveIssuesForCall calledFunc callPos positions deps =
+    let reachableFuncs = findReachableFunctions calledFunc deps
+    in [ HoistingWarning
+          { hwFunction = "<top-level>"
+          , hwCalls = reachableFunc
+          , hwIssue = CallBeforeDefinition
+          , hwSeverity = Error
+          }
+       | reachableFunc <- Set.toList reachableFuncs
+       , case Map.lookup reachableFunc positions of
+           Just defPos -> callPos < defPos  -- Transitively called before definition
+           Nothing -> False  -- External function, assume it's fine
+       ]
+
+  -- Find all functions reachable from a given function through transitive calls
+  findReachableFunctions :: T.Text -> Map.Map T.Text (Set.Set T.Text) -> Set.Set T.Text
+  findReachableFunctions startFunc deps = go Set.empty [startFunc]
+   where
+    go visited [] = visited
+    go visited (current:rest)
+      | current `Set.member` visited = go visited rest
+      | otherwise = 
+          let newVisited = Set.insert current visited
+              directCalls = Map.findWithDefault Set.empty current deps
+              newToVisit = Set.toList directCalls ++ rest
+          in go newVisited newToVisit
 
 -- ============================================================================
 -- Warning Formatting
@@ -204,8 +293,6 @@ formatHoistingWarnings analysis =
       , "==============================="
       , ""
       , intercalate "\n" (map formatWarning (haWarnings analysis))
-      , ""
-      , "Definition Order: " ++ intercalate " -> " (map T.unpack (haDefinitionOrder analysis))
       ]
  where
   formatWarning :: HoistingWarning -> String
@@ -216,5 +303,5 @@ formatHoistingWarnings analysis =
         issueStr = case hwIssue warn of
           CallBeforeDefinition -> "calls function before it's defined"
           PotentialTDZ -> "potential temporal dead zone issue"
-    in severityStr ++ ": Function '" ++ T.unpack (hwFunction warn) ++ 
-       "' " ++ issueStr ++ " '" ++ T.unpack (hwCalls warn) ++ "'"
+    in severityStr ++ ": Top-level code calls function '" ++ T.unpack (hwCalls warn) ++ 
+       "' before it's defined"
