@@ -135,10 +135,10 @@ parseLambdaExpr = PClass.parseFix @h $ do
       sepEndBy
         ( do
             patt <- PClass.parsePattern
-            PClass.parseSymbol ":"
-            typ <- PClass.parseMType
-
-            return (patt, typ)
+            mTyp <- optional $ do
+              PClass.parseSymbol ":"
+              PClass.parseMType
+            return (patt, mTyp)
         )
         (PClass.parseSymbol ",")
   PClass.parseSymbol "=>"
@@ -176,9 +176,10 @@ parseMatchExpr = PClass.parseFix @h $ do
                 sepEndBy
                   ( do
                       patt <- PClass.parsePattern
-                      PClass.parseSymbol ":"
-                      typ <- PClass.parseMType
-                      return (patt, typ)
+                      mTyp <- optional $ do
+                        PClass.parseSymbol ":"
+                        PClass.parseMType
+                      return (patt, mTyp)
                   )
                   (PClass.parseSymbol ",")
             PClass.parseSymbol "=>"
@@ -209,12 +210,13 @@ parseLet =
       _ <- getSourcePos
       PClass.parseReservedWord "let"
       pat <- PClass.parsePattern
-      PClass.parseSymbol ":"
-      typ <- PClass.parseMType
+      mTyp <- optional $ do
+        PClass.parseSymbol ":"
+        PClass.parseMType
       PClass.parseSymbol ":="
       body <- parseExpr @h
       PClass.parseSymbol ";"
-      return $ hInject $ Let pat typ body
+      return $ hInject $ Let pat mTyp body
   )
     <?> "let binding"
 

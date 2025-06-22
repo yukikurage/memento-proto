@@ -1,0 +1,38 @@
+// Test basic type inference capabilities
+
+// 1. Let bindings without type annotations
+val example1 : number := {
+  let x := 10;         // inferred as number
+  let y := x + 5;      // inferred as number from usage
+  y
+};
+
+// 2. Lambda parameters without type annotations  
+val example2 : number := {
+  let double := (n) => n * 2;     // n inferred as number from * operator
+  let result := double(21);       // application works
+  result  
+};
+
+// 3. Multiple parameters inferred
+val example3 : bool := {
+  let compare := (a, b) => a < b;  // both inferred as number from < operator
+  compare(5, 10)
+};
+
+// 4. Mixed explicit and inferred types
+val example4 : (f : (x : number) => number) => number := 
+  (f : (x : number) => number) => {
+    let input := 100;     // inferred as number
+    f(input)              // type-checks correctly
+  };
+
+// 5. Nested let bindings with inference
+val example5 : number := {
+  let outer := 1;
+  {
+    let inner := outer + 1;     // inner inferred as number
+    let result := inner * 2;    // result inferred as number
+    result
+  }
+};

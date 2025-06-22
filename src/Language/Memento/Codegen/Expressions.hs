@@ -28,12 +28,12 @@ genExpr astE = case unHFix astE of
     EBinOp op e1 e2 -> genBinOpExpr op e1 e2
     EBlock lets e -> genBlock lets e
 
-genLambda :: List (AST KPattern, AST KType) -> AST KExpr -> Text
+genLambda :: List (AST KPattern, Maybe (AST KType)) -> AST KExpr -> Text
 genLambda ps e =
   let
     genArg :: Int -> Text
     genArg n = "_ARG_" <> T.pack (show n) <> "_"
-    args = zipWith (\(p, t) n -> genArg n) ps [0 ..]
+    args = zipWith (\(p, mt) n -> genArg n) ps [0 ..]
    in
     "("
       <> T.intercalate ", " args
@@ -43,7 +43,7 @@ genLambda ps e =
             (uncurry genConstDef)
             ( concat $
                 zipWith
-                  ( \(p, t) n ->
+                  ( \(p, mt) n ->
                       snd $ -- 定義だけ取り出す
                         genPattern p (genArg n) -- _ARG_n_ をもとにしてパターンを解釈
                   )
@@ -58,7 +58,7 @@ genLambda ps e =
 genApply :: AST KExpr -> List (AST KExpr) -> Text
 genApply e es = genExpr e <> "(" <> T.intercalate ", " (map genExpr es) <> ")"
 
-genLet :: AST KPattern -> AST KType -> AST KExpr -> Int -> Text
+genLet :: AST KPattern -> Maybe (AST KType) -> AST KExpr -> Int -> Text
 genLet p t e n =
   let
     -- 一旦 const _ARG_n_ = e としてから、パターンでのスプリットを導入
@@ -77,7 +77,7 @@ genLet p t e n =
           (genConstDefRaw ("_ARG_" <> T.pack (show n) <> "_") (genExpr e))
             : map (uncurry genConstDef) bindings
 
-genMatch :: List (AST KExpr) -> List (List (AST KPattern, AST KType), AST KExpr) -> Text
+genMatch :: List (AST KExpr) -> List (List (AST KPattern, Maybe (AST KType)), AST KExpr) -> Text
 genMatch es clauses =
   let
     -- Generate names for each scrutinee expression
@@ -89,7 +89,7 @@ genMatch es clauses =
     scrutineeDefs = zipWith (\e n -> genConstDefRaw (argName n) (genExpr e)) es [0 ..]
 
     -- Generate code for each clause
-    genClause :: ((List (AST KPattern, AST KType), AST KExpr), Int) -> Text
+    genClause :: ((List (AST KPattern, Maybe (AST KType)), AST KExpr), Int) -> Text
     genClause ((patsWithTypes, bodyExpr), _) =
       let
         -- Extract only patterns, ignore types

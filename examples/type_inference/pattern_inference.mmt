@@ -1,0 +1,39 @@
+// Pattern matching with type inference
+
+data Option [Some<T> : (value : T) => Option<T>, None<T> : () => Option<T>];
+
+// Pattern variable types inferred from context
+val get_or_zero : (opt : Option<number>) => number :=
+  (opt : Option<number>) =>
+    switch (opt) [
+      (Some(x)) => x,        // x : number inferred from Option<number>
+      (None()) => 0
+    ];
+
+// More complex pattern inference
+data Either [Left<A, B> : (value : A) => Either<A, B>, Right<A, B> : (value : B) => Either<A, B>];
+
+val either_to_number : (e : Either<number, bool>) => number :=
+  (e : Either<number, bool>) =>
+    switch (e) [
+      (Left(n)) => n,              // n : number inferred
+      (Right(b)) => if (b) { 1 } else { 0 }  // b : bool inferred
+    ];
+
+// Nested patterns with inference
+data Pair [MkPair<A, B> : (first : A, second : B) => Pair<A, B>];
+
+val swap_pair : (p : Pair<number, bool>) => Pair<bool, number> :=
+  (p : Pair<number, bool>) =>
+    switch (p) [
+      (MkPair(x, y)) => MkPair(y, x)  // x : number, y : bool inferred
+    ];
+
+// Let binding in patterns
+val test_pattern : number := {
+  let opt := Some(42);
+  switch (opt) [
+    (Some(value)) => value,  // value : number inferred
+    (None()) => 0
+  ]
+};

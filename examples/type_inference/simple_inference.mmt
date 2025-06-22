@@ -1,0 +1,45 @@
+// Simple type inference test
+
+// Basic let binding inference
+val test1 : number := {
+  let x := 42;        // number inferred
+  let y := x + 1;     // number inferred from usage
+  y
+};
+
+// Lambda parameter inference
+val test2 : number := {
+  let add_one := (x) => x + 1;    // x : number inferred from + operator
+  add_one(5)
+};
+
+// Multiple parameter inference
+val test3 : number := {
+  let add := (x, y) => x + y;      // both x, y : number inferred
+  add(3, 4)
+};
+
+// Nested inference
+val test4 : bool := {
+  let gt := (a, b) => a > b;       // a, b : number inferred from > operator
+  gt(10, 5)
+};
+
+// String inference
+val test5 : string := {
+  let name := "World";     // string inferred
+  let greeting := "Hello"; // string inferred
+  name  // Just return the string
+};
+
+// Boolean inference
+val test6 : bool := {
+  let negate := (b) => if (b) { false } else { true };  // b : bool inferred
+  negate(true)
+};
+
+// Mixed explicit and inferred
+val test7 : (x : number) => number := (x) => {
+  let double := (n) => n * 2;    // n : number inferred
+  double(x)
+};

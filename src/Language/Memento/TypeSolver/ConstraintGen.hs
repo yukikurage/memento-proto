@@ -96,14 +96,11 @@ inferProgram ast = do
           filteredConstraints = constraints
           varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
 
-      -- traceM $ formatTypeEnv $ icTypeEnv finalCtx
-      let genBndMap = calculateGenericBounds varMap $ icAssumptions finalCtx
-
-      case solve varMap genBndMap filteredConstraints of
+      case solve varMap (icAssumptions finalCtx) filteredConstraints of
         Success ->
           Right (icTypeEnv finalCtx)
         Contradiction msg ->
-          Left $ "Type error: " ++ msg ++ "\n" ++ formatConstraintSet filteredConstraints ++ "\n" ++ formatBoundsMap genBndMap
+          Left $ "Type error: " ++ msg ++ "\n" ++ formatConstraintSet filteredConstraints ++ "\n" ++ formatBoundsMap (calculateGenericBounds varMap $ icAssumptions finalCtx)
  where
   -- Process the program
   inferProgramM :: AST KProgram -> InferM ()
@@ -200,12 +197,6 @@ saveAssumptions = gets icAssumptions
 
 restoreAssumptions :: AssumptionSet -> InferM ()
 restoreAssumptions assumptions = modify $ \ctx -> ctx{icAssumptions = assumptions}
-
--- Generate GADT assumptions by attempting to unify constructor return type with scrutinee type
-generateGADTAssumptions :: Type -> Type -> InferM ()
-generateGADTAssumptions (TApplication name1 args1) (TApplication name2 args2)
-  | name1 == name2 = zipWithM_ addEqAssumption args1 args2
-generateGADTAssumptions _ _ = throwError "Cannot generate GADT assumptions for non-application types"
 
 -- ============================================================================
 -- Type Conversion and Instantiation
@@ -511,8 +502,10 @@ inferExpr ast =
       SLiteral.BoolLiteral b -> TLiteral (LBool b)
       SLiteral.StringLiteral s -> TLiteral (LString s)
 
-  inferLambdaParam (patAst, typeAst) = do
-    paramType <- convertMType typeAst
+  inferLambdaParam (patAst, mTypeAst) = do
+    paramType <- case mTypeAst of
+      Just typeAst -> convertMType typeAst
+      Nothing -> TVar <$> freshVar
     case unPattern (extractSyntax patAst) of
       SPattern.PVar varAst -> do
         let SVariable.Var name = unVariable (extractSyntax varAst)
@@ -546,10 +539,14 @@ inferExpr ast =
       return TBool
 
   inferLet letAst = case unLet (extractSyntax letAst) of
-    Let patAst typeAst exprAst -> do
+    Let patAst mTypeAst exprAst -> do
       exprType <- inferExpr exprAst
-      declaredType <- convertMType typeAst
-      addConstraint $ Subtype exprType declaredType
+      declaredType <- case mTypeAst of
+        Just typeAst -> do
+          dt <- convertMType typeAst
+          addConstraint $ Subtype exprType dt
+          return dt
+        Nothing -> return exprType
       case unPattern (extractSyntax patAst) of
         SPattern.PVar varAst -> do
           let SVariable.Var name = unVariable (extractSyntax varAst)
@@ -564,7 +561,7 @@ inferExpr ast =
 -- Pattern Matching
 -- ============================================================================
 
-inferMatchCase :: [Type] -> Type -> (List (AST KPattern, AST KType), AST KExpr) -> InferM ()
+inferMatchCase :: [Type] -> Type -> (List (AST KPattern, Maybe (AST KType)), AST KExpr) -> InferM ()
 inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   savedEnv <- gets icTypeEnv
   -- savedAssumptions <- saveAssumptions
@@ -591,9 +588,13 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   -- restoreAssumptions savedAssumptions
   modify $ \ctx -> ctx{icTypeEnv = savedEnv}
  where
-  inferPattern (patAst, typeAst) scrutineeType = do
-    declaredType <- convertMType typeAst
-    addConstraint $ Subtype scrutineeType declaredType
+  inferPattern (patAst, mTypeAst) scrutineeType = do
+    declaredType <- case mTypeAst of
+      Just typeAst -> do
+        dt <- convertMType typeAst
+        addConstraint $ Subtype scrutineeType dt
+        return dt
+      Nothing -> return scrutineeType
     processPattern patAst declaredType
 
   processPattern patAst expectedType = case unPattern (extractSyntax patAst) of
@@ -622,7 +623,7 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
                 ++ show (length argPatterns)
 
           -- Generate GADT assumptions by unifying constructor return type with scrutinee type
-          generateGADTAssumptions returnType expectedType
+          addAssumption returnType expectedType
 
           zipWithM_ processPattern argPatterns argTypes
         Nothing ->
@@ -642,7 +643,7 @@ inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
 -- Exhaustivity Checking (Simplified)
 -- ============================================================================
 
-checkExhaustivity :: [Type] -> [(List (AST KPattern, AST KType), AST KExpr)] -> InferM ()
+checkExhaustivity :: [Type] -> [(List (AST KPattern, Maybe (AST KType)), AST KExpr)] -> InferM ()
 checkExhaustivity scrutineeTypes cases = do
   -- Extract patterns from each case
   let patterns = [map fst pats | (pats, _) <- cases]

@@ -1,0 +1,37 @@
+// Basic type inference examples
+
+// Let bindings without type annotations
+val test_let : number := {
+  let x := 42;         // number inferred
+  let y := x + 1;      // number inferred
+  let z := true;       // bool inferred
+  let s := "hello";    // string inferred
+  x + y                // returns number
+};
+
+// Lambda expressions without type annotations
+val identity : (x : number) => number := (x) => x;  // parameter type inferred from usage
+
+val add : (x : number, y : number) => number := (x, y) => x + y;  // both parameters inferred
+
+// More complex inference
+val compose_example : number := {
+  let add_one := (x) => x + 1;      // (x : number) => number inferred
+  let double := (x) => x * 2;        // (x : number) => number inferred
+  let composed := (x) => double(add_one(x));  // full type inferred
+  composed(5)
+};
+
+// Pattern matching without type annotations
+data Maybe [Some<T> : (value : T) => Maybe<T>, None<T> : () => Maybe<T>];
+
+val unwrap_or : (m : Maybe<number>, defaultValue : number) => number := 
+  (m : Maybe<number>, defaultValue : number) =>
+    switch (m) [
+      (Some(x)) => x,              // x : number inferred from context
+      (None()) => defaultValue     // type inferred
+    ];
+
+// Mixed annotations - some explicit, some inferred
+val mixed : (f : (x : number) => number, y : number) => number :=
+  (f, y) => f(y);  // f's type is explicit, y's type is inferred

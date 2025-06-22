@@ -13,9 +13,9 @@ import Language.Memento.Syntax.Tag (KBinOp, KExpr, KLet, KLiteral, KPattern, KTy
 data Expr f a where
   EVar :: f KVariable -> Expr f KExpr
   ELiteral :: f KLiteral -> Expr f KExpr
-  ELambda :: List (f KPattern, f KType) -> f KExpr -> Expr f KExpr
+  ELambda :: List (f KPattern, Maybe (f KType)) -> f KExpr -> Expr f KExpr
   EApply :: f KExpr -> List (f KExpr) -> Expr f KExpr
-  EMatch :: List (f KExpr) -> List (List (f KPattern, f KType), f KExpr) -> Expr f KExpr -- Match はλ式の集合
+  EMatch :: List (f KExpr) -> List (List (f KPattern, Maybe (f KType)), f KExpr) -> Expr f KExpr -- Match はλ式の集合
   EIf :: f KExpr -> f KExpr -> f KExpr -> Expr f KExpr
   EBinOp :: f KBinOp -> f KExpr -> f KExpr -> Expr f KExpr
   EBlock :: List (f KLet) -> f KExpr -> Expr f KExpr
@@ -52,7 +52,7 @@ deriving instance
   Ord (Expr f a)
 
 data Let f a where
-  Let :: f KPattern -> f KType -> f KExpr -> Let f KLet
+  Let :: f KPattern -> Maybe (f KType) -> f KExpr -> Let f KLet
 
 deriving instance
   ( Show (f KPattern)
@@ -76,12 +76,12 @@ deriving instance
 instance HFunctor Expr where
   hmap f (EVar v) = EVar (f v)
   hmap f (ELiteral l) = ELiteral (f l)
-  hmap f (ELambda ps e) = ELambda (map (bimap f f) ps) (f e)
+  hmap f (ELambda ps e) = ELambda (map (\(p, mt) -> (f p, fmap f mt)) ps) (f e)
   hmap f (EApply e es) = EApply (f e) (map f es)
-  hmap f (EMatch es cs) = EMatch (map f es) (map (bimap (map (bimap f f)) f) cs)
+  hmap f (EMatch es cs) = EMatch (map f es) (map (\(ps, e) -> (map (\(p, mt) -> (f p, fmap f mt)) ps, f e)) cs)
   hmap f (EIf e1 e2 e3) = EIf (f e1) (f e2) (f e3)
   hmap f (EBinOp op e1 e2) = EBinOp (f op) (f e1) (f e2)
   hmap f (EBlock ls e) = EBlock (map f ls) (f e)
 
 instance HFunctor Let where
-  hmap f (Let p t e) = Let (f p) (f t) (f e)
+  hmap f (Let p mt e) = Let (f p) (fmap f mt) (f e)
