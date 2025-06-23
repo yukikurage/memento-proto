@@ -1,93 +1,122 @@
 module Language.Memento.TypeSolver.Normalize where
 
+import Control.Monad.Error.Class (MonadError)
 import qualified Data.Set as Set
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
 
--- Normalize a type according to the rules in TYPE_SOLVER.md
-normalize :: Type -> Type
-normalize = fixpoint normalizeStep
- where
-  fixpoint f x =
-    let x' = f x
-     in if x == x' then x else fixpoint f x'
-
-normalizeStep :: Type -> Type
-normalizeStep TNumber = TNumber
-normalizeStep TBool = TBool
-normalizeStep TString = TString
-normalizeStep TNever = TNever
-normalizeStep TUnknown = TUnknown
-normalizeStep (TLiteral lit) = TLiteral lit
-normalizeStep (TVar name) = TVar name
-normalizeStep (TFunction args t2) = TFunction (map normalize args) (normalize t2)
-normalizeStep (TUnion ts) = normalizeUnion (Set.map normalize ts) -- Union has special normalization
-normalizeStep (TIntersection ts) = normalizeIntersection (Set.map normalize ts) --  Intersection has special normalization
-normalizeStep (TGeneric name) = TGeneric name
-normalizeStep (TApplication name args) = TApplication name (map normalize args)
+normalize ::
+  forall m.
+  (MonadError TypeError m) =>
+  TypeConstructorVariances ->
+  GenericBoundsMap ->
+  Type ->
+  m Type
+normalize tcVars genBnd t = case t of
+  TNumber -> pure TNumber
+  TBool -> pure TBool
+  TString -> pure TString
+  TNever -> pure TNever
+  TUnknown -> pure TUnknown
+  TLiteral lit -> pure $ TLiteral lit
+  TVar name -> pure $ TVar name
+  TFunction args t2 -> do
+    normalizedArg <- mapM (normalize tcVars genBnd) args
+    TFunction normalizedArg <$> normalize tcVars genBnd t2
+  TUnion ts ->
+    normalizeUnion . Set.fromList
+      =<< mapM (normalize tcVars genBnd) (Set.toList ts) -- Union has special normalization
+  TIntersection ts ->
+    normalizeIntersection . Set.fromList
+      =<< mapM (normalize tcVars genBnd) (Set.toList ts) -- Union has special normalization
+  TGeneric name -> pure $ TGeneric name
+  TApplication name args -> TApplication name <$> mapM (normalize tcVars genBnd) args
 
 -- Normalize union types
-normalizeUnion :: Set.Set Type -> Type
-normalizeUnion ts =
+normalizeUnion ::
+  forall m.
+  (MonadError TypeError m) =>
+  Set.Set Type ->
+  m Type
+normalizeUnion ts = do
   let ts' = Set.toList ts
-      -- Remove TNever
-      withoutNever = filter (/= TNever) ts'
-      -- Check for TUnknown
-      hasUnknown = TUnknown `elem` ts'
-      -- Remove duplicates (handled by Set)
-      -- Flatten nested unions
-      flattened = concatMap flattenUnion withoutNever
+      flattened = concatMap flattenUnion ts'
+      withoutNever = filter (/= TNever) flattened
+      hasUnknown = TUnknown `elem` flattened
+  if hasUnknown
+    then
+      pure TUnknown
+    else
       -- Remove subtypes if we can check without variables
-      simplified = removeSubtypes flattened
-   in case (hasUnknown, simplified) of
-        (True, _) -> TUnknown
-        (False, []) -> TNever
-        (False, [t]) -> t
-        (False, ts'') -> TUnion (Set.fromList ts'')
+      -- removeSubtypes is heavy computation, so we avoid it for now
+      -- simplified <- removeSubtypes withoutNever
+      case withoutNever of
+        [] -> pure TNever
+        [t] -> pure t
+        ts'' -> pure $ TUnion (Set.fromList ts'')
 
 -- Normalize intersection types
-normalizeIntersection :: Set.Set Type -> Type
-normalizeIntersection ts =
+normalizeIntersection ::
+  forall m.
+  (MonadError TypeError m) =>
+  Set.Set Type ->
+  m Type
+normalizeIntersection ts = do
   let ts' = Set.toList ts
-      -- Remove TUnknown
-      withoutUnknown = filter (/= TUnknown) ts'
-      -- Check for TNever
-      hasNever = TNever `elem` ts'
-      -- Flatten nested intersections
-      flattened = concatMap flattenIntersection withoutUnknown
-      -- Remove supertypes if we can check without variables
-      simplified = removeSupertypes flattened
-   in case (hasNever, simplified) of
-        (True, _) -> TNever
-        (False, []) -> TUnknown
-        (False, [t]) -> t
-        (False, ts'') -> TIntersection (Set.fromList ts'')
+      flattened = concatMap flattenUnion ts'
+      withoutUnknown = filter (/= TUnknown) flattened
+      hasNever = TNever `elem` flattened
+  if hasNever
+    then
+      pure TNever
+    else
+      -- Remove subtypes if we can check without variables
+      -- simplified <- removeSupertypes withoutUnknown
+      case withoutUnknown of
+        [] -> pure TNever
+        [t] -> pure t
+        ts'' -> pure $ TUnion (Set.fromList ts'')
 
 -- Flatten union types
 flattenUnion :: Type -> [Type]
-flattenUnion (TUnion ts) = concatMap flattenUnion (Set.toList ts)
-flattenUnion t = [t]
+flattenUnion t = case t of
+  (TUnion ts) -> concatMap flattenUnion (Set.toList ts)
+  _ -> [t]
 
 -- Flatten intersection types
 flattenIntersection :: Type -> [Type]
-flattenIntersection (TIntersection ts) = concatMap flattenIntersection (Set.toList ts)
-flattenIntersection t = [t]
+flattenIntersection t = case t of
+  (TIntersection ts) -> concatMap flattenIntersection (Set.toList ts)
+  _ -> [t]
 
 -- Remove subtypes from a list (only for types without variables)
-removeSubtypes :: [Type] -> [Type]
-removeSubtypes [] = []
-removeSubtypes (t : ts) =
-  if any (\t' -> t /= t' && not (containsVar t || containsVar t') && isSubtype t t') ts
-    then removeSubtypes ts
-    else t : removeSubtypes (filter (\t' -> not (t /= t' && not (containsVar t || containsVar t') && isSubtype t' t)) ts)
+-- removeSubtypes ::
+--   forall m.
+--   (MonadError TypeError m) =>
+--   TypeConstructorVariances ->
+--   GenericBoundsMap ->
+--   [Type] ->
+--   m [Type]
+-- removeSubtypes [] = pure []
+-- removeSubtypes (t : ts) =
+--   if any (\t' -> andM [pure $ not (containsVar t || containsVar t'), isSubtype t t']) ts
+--     then removeSubtypes ts
+--     else t : removeSubtypes (filter (\t' -> not (t /= t' && not (containsVar t || containsVar t') && isSubtype t' t)) ts)
+-- removeSubtypes ts = case ts of
+--   [] -> pure []
+--   (t : ts') -> do
 
 -- Remove supertypes from a list (only for types without variables)
-removeSupertypes :: [Type] -> [Type]
-removeSupertypes [] = []
-removeSupertypes (t : ts) =
-  if any (\t' -> t /= t' && not (containsVar t || containsVar t') && isSubtype t' t) ts
-    then removeSupertypes ts
-    else t : removeSupertypes (filter (\t' -> not (t /= t' && not (containsVar t || containsVar t') && isSubtype t t')) ts)
+-- removeSupertypes ::
+--   forall m.
+--   (MonadError TypeError m) =>
+--   [Type] ->
+--   m [Type]
+-- removeSupertypes [] = []
+-- removeSupertypes (t : ts) =
+--   if any (\t' -> t /= t' && not (containsVar t || containsVar t') && isSubtype t' t) ts
+--     then removeSupertypes ts
+--     else t : removeSupertypes (filter (\t' -> not (t /= t' && not (containsVar t || containsVar t') && isSubtype t t')) ts)
 
 -- -- Special normalization for function types in unions/intersections
 -- -- (A -> B) | (C -> D) = (A & C -> B | D)

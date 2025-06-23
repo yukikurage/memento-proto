@@ -543,7 +543,7 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
                 [ variance
                 | typeParam <- typeParams
                 , let variance = case typeParam of
-                        TGeneric varName -> foldr (combineVariance . analyzeParameterVariance varMap varName) Bivariant argTypes
+                        TGeneric varName -> foldr (combineVariance . analyzeVariance varMap varName) Bivariant argTypes
                         _ -> Invariant
                 ]
           let typeScheme = TypeScheme freshGenerics fullType

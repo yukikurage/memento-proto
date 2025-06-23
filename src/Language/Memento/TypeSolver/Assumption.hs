@@ -49,10 +49,7 @@ calculateGenericBounds varMap assumptions =
             let uppers = takeUppers name
                 lowers = takeLowers name
              in ( name
-                , GenericBounds
-                    { gbUppers = uppers
-                    , gbLowers = lowers
-                    }
+                , (Set.fromList lowers, Set.fromList uppers)
                 )
         )
         generics
@@ -77,7 +74,7 @@ decomposeAssumption varMap cns = case cns of
   Subtype TNever t2 -> (Set.empty, Set.empty) -- Never is a subtype of anything
   Subtype t1 TUnknown -> (Set.empty, Set.empty) -- Unknown is a supertype of anything]
   Subtype t1 t2
-    | not (containsGeneric t1 || containsGeneric t2 || containsVar t1 || containsVar t2) -> (Set.empty, Set.empty)
+    | not (containsGeneric t1 || containsGeneric t2) -> (Set.empty, Set.empty)
   Subtype (TUnion ts) t -> (Set.empty,) $ Set.fromList [Subtype t' t | t' <- Set.toList ts]
   Subtype t (TIntersection ts) -> (Set.empty,) $ Set.fromList [Subtype t t' | t' <- Set.toList ts]
   Subtype t (TUnion ts) -> (Set.empty, Set.empty)
