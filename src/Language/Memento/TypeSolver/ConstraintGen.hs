@@ -90,7 +90,7 @@ inferProgram ast = do
           , icGenericTypes = Map.empty
           , icAssumptions = Set.empty
           }
-  
+
   case unProgram (extractSyntax ast) of
     SProgram.Program declAsts -> do
       -- Phase 1: Collect all definition types and data constructors
@@ -103,7 +103,7 @@ inferProgram ast = do
   -- Phase 1: Collect all val types and data types into environment
   collectAllDefinitionTypes :: [AST KDefinition] -> InferM ()
   collectAllDefinitionTypes declAsts = mapM_ collectDefinitionType declAsts
-  
+
   -- Phase 2: Check each definition body with full environment available
   checkAllDefinitionBodies :: [AST KDefinition] -> InferContext -> Either String (Map.Map T.Text TypeScheme)
   checkAllDefinitionBodies declAsts baseCtx = do
@@ -332,7 +332,7 @@ collectDefinitionType ast =
           { icTemporaryTypeConstructors = Set.empty
           }
     SDefinition.TypeDef aliasAst _params typeAst -> do
-      -- Type definitions work the same 
+      -- Type definitions work the same
       let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
       aliasType <- convertMType typeAst
       addVar aliasName aliasType
@@ -358,7 +358,7 @@ collectDefinitionType ast =
 
     -- Convert declared type and add to environment
     declaredType <- convertMType typeAst
-    
+
     -- Restore generic context
     modify $ \ctx -> ctx{icGenericTypes = savedGenericTypes}
 
@@ -376,26 +376,26 @@ checkSingleDefinition baseCtx ast =
     SDefinition.ValDef varAst typeParams typeAst exprAst -> do
       let SVariable.Var name = unVariable (extractSyntax varAst)
       checkPolymorphicValBody baseCtx name typeParams typeAst exprAst
-    SDefinition.DataDef _ _ -> 
+    SDefinition.DataDef _ _ ->
       -- Data definitions already processed in phase 1
       return ()
-    SDefinition.TypeDef _ _ _ -> 
-      -- Type definitions already processed in phase 1  
+    SDefinition.TypeDef _ _ _ ->
+      -- Type definitions already processed in phase 1
       return ()
  where
   checkPolymorphicValBody baseCtx name typeParams typeAst exprAst = do
     -- Create isolated context for this definition
-    let isolatedCtx = baseCtx { icConstraints = Set.empty, icAssumptions = Set.empty }
-    
+    let isolatedCtx = baseCtx{icConstraints = Set.empty, icAssumptions = Set.empty}
+
     case runExcept (runStateT (checkValBody name typeParams typeAst exprAst) isolatedCtx) of
       Left err -> Left $ "In definition of " ++ T.unpack name ++ ": " ++ err
       Right ((), finalCtx) -> do
         let constraints = icConstraints finalCtx
             varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
-        
+
         case solve varMap (icAssumptions finalCtx) constraints of
           Success -> return ()
-          Contradiction msg -> 
+          Contradiction msg ->
             Left $ "Type error in " ++ T.unpack name ++ ": " ++ msg ++ "\n" ++ formatConstraintSet constraints
 
   checkValBody name typeParams typeAst exprAst = do
@@ -541,8 +541,10 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
           varMap <- getTypeConstructorVariances
           let tciVariance =
                 [ variance
-                | TGeneric varName <- typeParams
-                , let variance = foldr (combineVariance . analyzeParameterVariance varMap varName) Bivariant argTypes
+                | typeParam <- typeParams
+                , let variance = case typeParam of
+                        TGeneric varName -> foldr (combineVariance . analyzeParameterVariance varMap varName) Bivariant argTypes
+                        _ -> Invariant
                 ]
           let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme

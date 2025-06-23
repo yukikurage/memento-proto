@@ -35,12 +35,21 @@ library
     Language.Memento.Codegen.Literal
     Language.Memento.Codegen.Pattern
     Language.Memento.Codegen.Programs
+    Language.Memento.CodegenWASM
+    Language.Memento.CodegenWASM.Control
+    Language.Memento.CodegenWASM.Data
+    Language.Memento.CodegenWASM.Expressions
+    Language.Memento.CodegenWASM.Functions
+    Language.Memento.CodegenWASM.Memory
+    Language.Memento.CodegenWASM.Types
     Language.Memento.Data.HCoproduct
     Language.Memento.Data.HFix
     Language.Memento.Data.HFunctor
     Language.Memento.Data.HOp
     Language.Memento.Data.HProduct
     Language.Memento.Data.NaturalTransformation
+    Language.Memento.IR
+    Language.Memento.LowerToIR
     Language.Memento.Parser
     Language.Memento.Parser.Class
     Language.Memento.Parser.Core

@@ -1,0 +1,39 @@
+data Expr [
+  mk_num_lit<T>(value : T) : Expr<T>,
+  mk_bool_lit(value : bool) : Expr<bool>,
+  mk_add(left : Expr<number>, right : Expr<number>) : Expr<number>,
+  mk_mul(left : Expr<number>, right : Expr<number>) : Expr<number>,
+  mk_if<T>(cond : Expr<bool>, then_branch : Expr<T>, else_branch : Expr<T>) : Expr<T>,
+  mk_eq(left : Expr<number>, right : Expr<number>) : Expr<bool>
+];
+
+/*
+data Expr [
+  mk_num_lit(value : number) : Expr,
+  mk_bool_lit(value : bool) : Expr,
+  mk_add(left : Expr, right : Expr) : Expr,
+  mk_mul(left : Expr, right : Expr) : Expr,
+  mk_if(cond : Expr, then_branch : Expr, else_branch : Expr) : Expr,
+  mk_eq(left : Expr, right : Expr) : Expr
+];
+*/
+
+val e1 : Expr<42> = mk_num_lit(42);
+val e2 : Expr<number> = mk_add(e1, mk_num_lit(2));
+val e3 : Expr<number> = mk_if(mk_bool_lit(true), mk_num_lit(1), mk_num_lit(0));
+
+data Option [
+  mk_some<T>(value : T) : Option<T>,
+  mk_none<T>() : Option<T>
+];
+
+val some_42 : Option<number> = mk_some(42);
+val none : Option<number> = mk_none();
+
+val return_some_nor_zero(x : Option<number>) : number =
+  switch (x) [
+    (mk_some(value)) => value,
+    (mk_none()) => 0
+  ];
+
+val main(args : number) : number = return_some_nor_zero(none);

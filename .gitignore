@@ -20,7 +20,7 @@ cabal.project.local
 .ghc.environment.*
 
 # Compiled JavaScript (コメントアウトすると他の人も実行結果を確認できます)
-dist/js/
+dist/
 
 # vscode-remote
 .vscode/
