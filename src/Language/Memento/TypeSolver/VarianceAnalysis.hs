@@ -16,7 +16,7 @@ import Language.Memento.Syntax
 import qualified Language.Memento.Syntax.MType as SMType
 import Language.Memento.Syntax.Tag (KType, KTypeVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
-import Language.Memento.TypeSolver.DataTypeAnalysis
+import Language.Memento.TypeSolver.DataTypeAnalysis (DataTypeInfo(..), ConstructorInfo(..), TypeParameterInfo(..), DataTypeAnalysis(..))
 import Language.Memento.TypeSolver.Types
 
 -- | Variance expression representing how a type parameter appears
@@ -56,8 +56,11 @@ generateVarianceEquations analysis = Map.fromList allEquations
     
     generateForDataType :: DataTypeInfo -> [(T.Text, VarianceExpr)]
     generateForDataType dt =
-      [ (dtiName dt <> "_" <> param, generateForParam dt param)
-      | param <- dtiTypeParams dt
+      [ (dtiName dt <> "_" <> tpiName paramInfo, 
+         if tpiIsGeneric paramInfo 
+         then generateForParam dt (tpiName paramInfo)  -- Analyze variance for generic parameters
+         else ConstE Invariant)                        -- Mark concrete parameters as invariant
+      | paramInfo <- dtiTypeParamInfo dt
       ]
     
     generateForParam :: DataTypeInfo -> T.Text -> VarianceExpr
@@ -173,6 +176,6 @@ extractVariancesFromSolution analysis solution =
   where
     extractVariancesForType :: DataTypeInfo -> [Variance]
     extractVariancesForType dt =
-      [ Map.findWithDefault Bivariant (dtiName dt <> "_" <> param) solution
-      | param <- dtiTypeParams dt
+      [ Map.findWithDefault Bivariant (dtiName dt <> "_" <> tpiName paramInfo) solution
+      | paramInfo <- dtiTypeParamInfo dt
       ]

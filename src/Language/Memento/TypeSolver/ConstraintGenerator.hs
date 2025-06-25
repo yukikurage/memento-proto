@@ -12,9 +12,12 @@ module Language.Memento.TypeSolver.ConstraintGenerator
   )
 where
 
+import Control.Monad (foldM)
+import Control.Monad.Error.Class (MonadError, throwError)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Debug.Trace (trace)
 import Language.Memento.Syntax
 import qualified Language.Memento.Syntax.BinOp as SBinOp
 import qualified Language.Memento.Syntax.Definition as SDefinition
@@ -80,9 +83,9 @@ generateConstraints env ast = case unProgram (extractSyntax ast) of
 
 -- | Generate constraints for an expression
 generateExprConstraints :: ConstraintEnv -> AST KExpr -> Either TypeError ConstraintGenerationResult
-generateExprConstraints env ast = 
-  let (constraints, inferredType, newCounter, newBindings) = inferExprPure env ast
-  in Right $ ConstraintGenerationResult
+generateExprConstraints env ast = do
+  (constraints, inferredType, newCounter, newBindings) <- inferExprMonadic env ast
+  return $ ConstraintGenerationResult
     { cgrConstraints = constraints
     , cgrInferredType = inferredType
     , cgrNewVarCounter = newCounter
@@ -90,55 +93,57 @@ generateExprConstraints env ast =
     }
 
 -- ============================================================================
--- Pure Expression Inference
+-- Monadic Expression Inference
 -- ============================================================================
 
--- | Pure expression inference that generates constraints
-inferExprPure :: ConstraintEnv -> AST KExpr -> (ConstraintSet, Type, Int, Map.Map T.Text TypeScheme)
-inferExprPure env ast = 
+-- | Monadic expression inference that generates constraints and can report errors
+inferExprMonadic :: ConstraintEnv -> AST KExpr -> Either TypeError (ConstraintSet, Type, Int, Map.Map T.Text TypeScheme)
+inferExprMonadic env ast = 
   let meta = extractMetadata ast
   in case unExpr (extractSyntax ast) of
     EVar varAst -> 
       let SVariable.Var name = unVariable (extractSyntax varAst)
       in case Map.lookup name (ceTypeEnv env) of
         Just scheme -> 
+          -- Debug: trace polymorphic instantiation
+          -- let _ = trace ("=== Instantiating polymorphic var: " ++ T.unpack name ++ " with scheme: " ++ show scheme) ()
           let (instType, newCounter) = instantiatePolymorphicTypePure env scheme
-          in (Set.empty, instType, newCounter, Map.empty)
+              -- _ = trace ("=== Instantiated to: " ++ T.unpack (formatType instType)) ()
+          in Right (Set.empty, instType, newCounter, Map.empty)
         Nothing -> 
-          -- Create a fresh variable for unbound names
-          let (freshVar, newCounter) = freshVarPure env
-          in (Set.empty, TVar freshVar, newCounter, Map.empty)
+          -- Report error for unbound variables
+          Left $ UnboundVariable (Just meta) name
     
     ELiteral litAst -> 
       let literalType = convertLiteralPure litAst
-      in (Set.empty, literalType, ceVarCounter env, Map.empty)
+      in Right (Set.empty, literalType, ceVarCounter env, Map.empty)
     
-    ELambda params bodyAst ->
+    ELambda params bodyAst -> do
       let (paramTypes, paramBindings, counterAfterParams) = processLambdaParams env params
           envWithParams = env { ceTypeEnv = Map.union paramBindings (ceTypeEnv env), ceVarCounter = counterAfterParams }
-          (bodyConstraints, bodyType, finalCounter, _) = inferExprPure envWithParams bodyAst
-          functionType = TFunction paramTypes bodyType
-      in (bodyConstraints, functionType, finalCounter, paramBindings)
+      (bodyConstraints, bodyType, finalCounter, _) <- inferExprMonadic envWithParams bodyAst
+      let functionType = TFunction paramTypes bodyType
+      return (bodyConstraints, functionType, finalCounter, paramBindings)
     
-    EApply funcAst argAsts ->
-      let (funcConstraints, funcType, counterAfterFunc, funcBindings) = inferExprPure env funcAst
-          envAfterFunc = env { ceVarCounter = counterAfterFunc }
-          (argResults, finalCounter) = processArguments envAfterFunc argAsts
-          argConstraints = Set.unions [cs | (cs, _, _, _) <- argResults]
+    EApply funcAst argAsts -> do
+      (funcConstraints, funcType, counterAfterFunc, funcBindings) <- inferExprMonadic env funcAst
+      let envAfterFunc = env { ceVarCounter = counterAfterFunc }
+      (argResults, finalCounter) <- processArgumentsMonadic envAfterFunc argAsts
+      let argConstraints = Set.unions [cs | (cs, _, _, _) <- argResults]
           argTypes = [t | (_, t, _, _) <- argResults]
           (resultVar, counterAfterResult) = freshVarPure env { ceVarCounter = finalCounter }
           resultType = TVar resultVar
           applicationConstraint = Subtype funcType (TFunction argTypes resultType)
           allConstraints = Set.unions [funcConstraints, argConstraints, Set.singleton applicationConstraint]
-      in (allConstraints, resultType, counterAfterResult, funcBindings)
+      return (allConstraints, resultType, counterAfterResult, funcBindings)
     
-    EIf condAst thenAst elseAst ->
-      let (condConstraints, condType, counterAfterCond, condBindings) = inferExprPure env condAst
-          envAfterCond = env { ceVarCounter = counterAfterCond }
-          (thenConstraints, thenType, counterAfterThen, thenBindings) = inferExprPure envAfterCond thenAst
-          envAfterThen = envAfterCond { ceVarCounter = counterAfterThen }
-          (elseConstraints, elseType, counterAfterElse, elseBindings) = inferExprPure envAfterThen elseAst
-          (resultVar, finalCounter) = freshVarPure env { ceVarCounter = counterAfterElse }
+    EIf condAst thenAst elseAst -> do
+      (condConstraints, condType, counterAfterCond, condBindings) <- inferExprMonadic env condAst
+      let envAfterCond = env { ceVarCounter = counterAfterCond }
+      (thenConstraints, thenType, counterAfterThen, thenBindings) <- inferExprMonadic envAfterCond thenAst
+      let envAfterThen = envAfterCond { ceVarCounter = counterAfterThen }
+      (elseConstraints, elseType, counterAfterElse, elseBindings) <- inferExprMonadic envAfterThen elseAst
+      let (resultVar, finalCounter) = freshVarPure env { ceVarCounter = counterAfterElse }
           resultType = TVar resultVar
           typeConstraints = Set.fromList
             [ Subtype condType TBool
@@ -147,36 +152,36 @@ inferExprPure env ast =
             ]
           allConstraints = Set.unions [condConstraints, thenConstraints, elseConstraints, typeConstraints]
           allBindings = Map.unions [condBindings, thenBindings, elseBindings]
-      in (allConstraints, resultType, finalCounter, allBindings)
+      return (allConstraints, resultType, finalCounter, allBindings)
     
-    EBinOp opAst leftAst rightAst ->
-      let (leftConstraints, leftType, counterAfterLeft, leftBindings) = inferExprPure env leftAst
-          envAfterLeft = env { ceVarCounter = counterAfterLeft }
-          (rightConstraints, rightType, counterAfterRight, rightBindings) = inferExprPure envAfterLeft rightAst
-          op = unBinOp (extractSyntax opAst)
+    EBinOp opAst leftAst rightAst -> do
+      (leftConstraints, leftType, counterAfterLeft, leftBindings) <- inferExprMonadic env leftAst
+      let envAfterLeft = env { ceVarCounter = counterAfterLeft }
+      (rightConstraints, rightType, counterAfterRight, rightBindings) <- inferExprMonadic envAfterLeft rightAst
+      let op = unBinOp (extractSyntax opAst)
           (opConstraints, resultType) = inferBinOpPure op leftType rightType
           allConstraints = Set.unions [leftConstraints, rightConstraints, opConstraints]
           allBindings = Map.union leftBindings rightBindings
-      in (allConstraints, resultType, counterAfterRight, allBindings)
+      return (allConstraints, resultType, counterAfterRight, allBindings)
     
-    EBlock letAsts exprAst ->
-      let (letConstraints, letBindings, counterAfterLets) = processLets env letAsts
-          envWithLets = env { ceTypeEnv = Map.union letBindings (ceTypeEnv env), ceVarCounter = counterAfterLets }
-          (exprConstraints, exprType, finalCounter, exprBindings) = inferExprPure envWithLets exprAst
-          allConstraints = Set.union letConstraints exprConstraints
+    EBlock letAsts exprAst -> do
+      (letConstraints, letBindings, counterAfterLets) <- processLetsMonadic env letAsts
+      let envWithLets = env { ceTypeEnv = Map.union letBindings (ceTypeEnv env), ceVarCounter = counterAfterLets }
+      (exprConstraints, exprType, finalCounter, exprBindings) <- inferExprMonadic envWithLets exprAst
+      let allConstraints = Set.union letConstraints exprConstraints
           allBindings = Map.union letBindings exprBindings
-      in (allConstraints, exprType, finalCounter, allBindings)
+      return (allConstraints, exprType, finalCounter, allBindings)
     
-    EMatch scrutinees cases ->
+    EMatch scrutinees cases -> do
       -- Simplified match handling for now
-      let (scrutineeResults, counterAfterScrutinees) = processArguments env scrutinees
-          scrutineeConstraints = Set.unions [cs | (cs, _, _, _) <- scrutineeResults]
+      (scrutineeResults, counterAfterScrutinees) <- processArgumentsMonadic env scrutinees
+      let scrutineeConstraints = Set.unions [cs | (cs, _, _, _) <- scrutineeResults]
           scrutineeTypes = [t | (_, t, _, _) <- scrutineeResults]
           (resultVar, finalCounter) = freshVarPure env { ceVarCounter = counterAfterScrutinees }
           resultType = TVar resultVar
           -- TODO: Process match cases properly
           allConstraints = scrutineeConstraints
-      in (allConstraints, resultType, finalCounter, Map.empty)
+      return (allConstraints, resultType, finalCounter, Map.empty)
 
 -- ============================================================================
 -- Helper Functions
@@ -192,7 +197,11 @@ freshVarPure env =
 -- | Process lambda parameters
 processLambdaParams :: ConstraintEnv -> [(AST KPattern, Maybe (AST KType))] -> ([Type], Map.Map T.Text TypeScheme, Int)
 processLambdaParams env params = 
+  -- let _ = trace ("=== Processing lambda params: " ++ show (length params) ++ " parameters") ()
+  --     _ = trace ("=== Environment generic types: " ++ show (ceGenericTypes env)) ()
   let (types, bindings, counter) = foldl processParam ([], Map.empty, ceVarCounter env) params
+      -- _ = trace ("=== Processed param types: " ++ show (map (T.unpack . formatType) (reverse types))) ()
+      -- _ = trace ("=== Processed param bindings: " ++ show (Map.keys bindings)) ()
   in (reverse types, bindings, counter)
   where
     processParam (accTypes, accBindings, currentCounter) (patAst, mTypeAst) =
@@ -215,40 +224,55 @@ processLambdaParams env params =
           (paramType : accTypes, accBindings, newCounter)
         _ -> (paramType : accTypes, accBindings, newCounter)  -- TODO: Handle complex patterns
 
--- | Process argument expressions
+-- | Process argument expressions (monadic version)
+processArgumentsMonadic :: ConstraintEnv -> [AST KExpr] -> Either TypeError ([(ConstraintSet, Type, Int, Map.Map T.Text TypeScheme)], Int)
+processArgumentsMonadic env args = do
+  (results, finalCounter) <- foldM processArg ([], ceVarCounter env) args
+  return (reverse results, finalCounter)
+  where
+    processArg (accResults, currentCounter) argAst = do
+      let envWithCounter = env { ceVarCounter = currentCounter }
+      result@(_, _, newCounter, _) <- inferExprMonadic envWithCounter argAst
+      return (result : accResults, newCounter)
+
+-- | Process argument expressions (pure version - kept for compatibility)
 processArguments :: ConstraintEnv -> [AST KExpr] -> ([(ConstraintSet, Type, Int, Map.Map T.Text TypeScheme)], Int)
 processArguments env args = 
-  let (results, finalCounter) = foldl processArg ([], ceVarCounter env) args
-  in (reverse results, finalCounter)
-  where
-    processArg (accResults, currentCounter) argAst =
-      let envWithCounter = env { ceVarCounter = currentCounter }
-          result@(_, _, newCounter, _) = inferExprPure envWithCounter argAst
-      in (result : accResults, newCounter)
+  case processArgumentsMonadic env args of
+    Right result -> result
+    Left _ -> ([], ceVarCounter env)  -- Fallback on error
 
--- | Process let bindings
-processLets :: ConstraintEnv -> [AST KLet] -> (ConstraintSet, Map.Map T.Text TypeScheme, Int)
-processLets env lets = 
-  let (allConstraints, allBindings, finalCounter) = foldl processLet (Set.empty, Map.empty, ceVarCounter env) lets
-  in (allConstraints, allBindings, finalCounter)
+-- | Process let bindings (monadic version)
+processLetsMonadic :: ConstraintEnv -> [AST KLet] -> Either TypeError (ConstraintSet, Map.Map T.Text TypeScheme, Int)
+processLetsMonadic env lets = do
+  (allConstraints, allBindings, finalCounter) <- foldM processLet (Set.empty, Map.empty, ceVarCounter env) lets
+  return (allConstraints, allBindings, finalCounter)
   where
-    processLet (accConstraints, accBindings, currentCounter) letAst =
+    processLet (accConstraints, accBindings, currentCounter) letAst = do
       case unLet (extractSyntax letAst) of
-        Let patAst mTypeAst exprAst ->
+        Let patAst mTypeAst exprAst -> do
           let envWithCounter = env { ceVarCounter = currentCounter, ceTypeEnv = Map.union accBindings (ceTypeEnv env) }
-              (exprConstraints, exprType, counterAfterExpr, _) = inferExprPure envWithCounter exprAst
-              (declaredType, typeConstraints, finalCounter) = case mTypeAst of
-                Just typeAst -> case convertASTType envWithCounter typeAst of
-                  Right dt -> (dt, Set.singleton (Subtype exprType dt), counterAfterExpr)
-                  Left _ -> (exprType, Set.empty, counterAfterExpr)
-                Nothing -> (exprType, Set.empty, counterAfterExpr)
-              newBindings = case unPattern (extractSyntax patAst) of
+          (exprConstraints, exprType, counterAfterExpr, _) <- inferExprMonadic envWithCounter exprAst
+          (declaredType, typeConstraints, finalCounter) <- case mTypeAst of
+            Just typeAst -> do
+              case convertASTType envWithCounter typeAst of
+                Right dt -> return (dt, Set.singleton (Subtype exprType dt), counterAfterExpr)
+                Left err -> Left err
+            Nothing -> return (exprType, Set.empty, counterAfterExpr)
+          let newBindings = case unPattern (extractSyntax patAst) of
                 SPattern.PVar varAst ->
                   let SVariable.Var name = unVariable (extractSyntax varAst)
                   in Map.insert name (TypeScheme [] declaredType) accBindings
                 _ -> accBindings  -- TODO: Handle complex patterns
               newConstraints = Set.unions [accConstraints, exprConstraints, typeConstraints]
-          in (newConstraints, newBindings, finalCounter)
+          return (newConstraints, newBindings, finalCounter)
+
+-- | Process let bindings (pure version - kept for compatibility)
+processLets :: ConstraintEnv -> [AST KLet] -> (ConstraintSet, Map.Map T.Text TypeScheme, Int)
+processLets env lets = 
+  case processLetsMonadic env lets of
+    Right result -> result
+    Left _ -> (Set.empty, Map.empty, ceVarCounter env)  -- Fallback on error
 
 -- | Pure binary operation inference
 inferBinOpPure :: SBinOp.BinOp f a -> Type -> Type -> (ConstraintSet, Type)

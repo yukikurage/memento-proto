@@ -1,0 +1,14 @@
+// Debug variance analysis for different parameter types
+
+// Pure generic (should be covariant)
+data Pure [PureCtor<T> : (value : T) => Pure<T>];
+
+// Pure concrete (should be invariant) 
+data Concrete [ConcreteCtor : (value : number) => Concrete<number>];
+
+// Mixed generic and concrete (T should be covariant, number should be invariant)
+data Mixed [MixedCtor<T> : (generic : T, concrete : number) => Mixed<T, number>];
+
+val pure_test : Pure<number> = PureCtor(42);
+val concrete_test : Concrete<number> = ConcreteCtor(42);
+val mixed_test : Mixed<string, number> = MixedCtor("test", 42);

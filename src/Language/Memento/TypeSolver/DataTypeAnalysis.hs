@@ -3,6 +3,7 @@
 module Language.Memento.TypeSolver.DataTypeAnalysis
   ( DataTypeInfo (..),
     ConstructorInfo (..),
+    TypeParameterInfo (..),
     DataTypeAnalysis (..),
     extractDataTypes,
     analyzeDataTypes,
@@ -30,10 +31,18 @@ data ConstructorInfo = ConstructorInfo
   }
   deriving (Show, Eq)
 
+-- | Type parameter information
+data TypeParameterInfo = TypeParameterInfo
+  { tpiName :: T.Text,           -- ^ Parameter name
+    tpiIsGeneric :: Bool         -- ^ True if generic (T, U), False if concrete (number, string)
+  }
+  deriving (Show, Eq)
+
 -- | Information about a complete data type
 data DataTypeInfo = DataTypeInfo
   { dtiName :: T.Text,                   -- ^ Data type name
     dtiTypeParams :: [T.Text],           -- ^ Type parameter names (extracted from first constructor)
+    dtiTypeParamInfo :: [TypeParameterInfo], -- ^ Detailed type parameter information
     dtiConstructors :: [ConstructorInfo], -- ^ All constructors for this type
     dtiKind :: Int                       -- ^ Number of type parameters
   }
@@ -64,13 +73,14 @@ extractDataType declAst = case unDefinition (extractSyntax declAst) of
   SDefinition.DataDef dataNameAst constructorDefs ->
     let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
         constructors = map (extractConstructorInfo dataName) constructorDefs
-        -- Extract type parameters from the first constructor (they should be consistent)
-        typeParams = case constructors of
-          [] -> []
-          (c:_) -> ciTypeParams c
+        -- Extract type parameters from constructor return types (handles existential types correctly)
+        (typeParams, typeParamInfo) = case constructors of
+          [] -> ([], [])
+          (c:_) -> extractDataTypeParamsWithInfo dataName (ciReturnType c)
     in DataTypeInfo
       { dtiName = dataName
       , dtiTypeParams = typeParams
+      , dtiTypeParamInfo = typeParamInfo
       , dtiConstructors = constructors
       , dtiKind = length typeParams
       }
@@ -96,6 +106,46 @@ extractFunctionSignature :: AST KType -> ([AST KType], AST KType)
 extractFunctionSignature typeAst = case unMType (extractSyntax typeAst) of
   SMType.TFunction params retAst -> (map snd params, retAst)  -- Extract types from (param, type) pairs
   _ -> ([], typeAst)  -- Not a function, treat as zero-argument constructor
+
+-- | Extract type parameters from a data type's return type (e.g., Consume<T> -> ["T"])
+extractDataTypeParams :: T.Text -> AST KType -> [T.Text]
+extractDataTypeParams dataName typeAst = fst $ extractDataTypeParamsWithInfo dataName typeAst
+
+-- | Extract type parameters with detailed information (generic vs concrete)
+extractDataTypeParamsWithInfo :: T.Text -> AST KType -> ([T.Text], [TypeParameterInfo])
+extractDataTypeParamsWithInfo dataName typeAst = case unMType (extractSyntax typeAst) of
+  SMType.TVar varAst -> 
+    let SVariable.TypeVar varName = unTypeVariable (extractSyntax varAst)
+    in if varName == dataName
+       then ([], [])  -- No type parameters (e.g., List -> [])
+       else ([], [])  -- Not the expected data type
+  SMType.TApplication baseAst argAsts ->
+    let SVariable.TypeVar baseName = unTypeVariable (extractSyntax baseAst)
+    in if baseName == dataName
+       then 
+         let paramInfo = map extractTypeParameterInfo argAsts
+             paramNames = map tpiName paramInfo
+         in (paramNames, paramInfo)
+       else ([], [])  -- Not the expected data type
+  _ -> ([], [])  -- Other cases, no parameters
+
+-- | Extract detailed type parameter information
+extractTypeParameterInfo :: AST KType -> TypeParameterInfo
+extractTypeParameterInfo typeAst = case unMType (extractSyntax typeAst) of
+  SMType.TVar varAst -> 
+    let SVariable.TypeVar varName = unTypeVariable (extractSyntax varAst)
+    in TypeParameterInfo varName True  -- Generic type variable
+  SMType.TNumber -> TypeParameterInfo "number" False    -- Concrete type parameter
+  SMType.TInt -> TypeParameterInfo "int" False          -- Concrete type parameter  
+  SMType.TBool -> TypeParameterInfo "bool" False        -- Concrete type parameter
+  SMType.TString -> TypeParameterInfo "string" False    -- Concrete type parameter
+  SMType.TNever -> TypeParameterInfo "never" False      -- Concrete type parameter
+  SMType.TUnknown -> TypeParameterInfo "unknown" False  -- Concrete type parameter
+  _ -> TypeParameterInfo "unknown" False  -- Fallback for complex types
+
+-- | Extract type parameter name from type AST, handling both generic and concrete types
+extractTypeVarName :: AST KType -> T.Text
+extractTypeVarName typeAst = tpiName $ extractTypeParameterInfo typeAst
 
 -- | Perform complete data type analysis on a program
 analyzeDataTypes :: AST KProgram -> DataTypeAnalysis

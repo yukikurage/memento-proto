@@ -1,0 +1,13 @@
+// Test GADT-style concrete type parameters
+// Generic type parameter (should be covariant)
+data GenericList [Cons<T> : (head : T, tail : GenericList<T>) => GenericList<T>, Nil<T> : () => GenericList<T>];
+
+// GADT-style with concrete type parameter (should be invariant)
+data NumberList [NumCons : (head : number, tail : NumberList<number>) => NumberList<number>, NumNil : () => NumberList<number>];
+
+// Mixed case - some generic, some concrete
+data MixedType [MixedCtor<T> : (generic : T, concrete : number) => MixedType<T, number>];
+
+val test_generic : GenericList<number> = Cons(42, Nil());
+val test_concrete : NumberList<number> = NumCons(42, NumNil());
+val test_mixed : MixedType<string, number> = MixedCtor("hello", 42);
