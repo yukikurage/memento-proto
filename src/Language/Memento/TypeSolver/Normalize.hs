@@ -1,5 +1,6 @@
 module Language.Memento.TypeSolver.Normalize where
 
+import Control.Applicative (liftA2)
 import Control.Monad.Error.Class (MonadError)
 import qualified Data.Set as Set
 import Language.Memento.TypeSolver.Subtype
@@ -136,3 +137,7 @@ flattenIntersection t = case t of
 --     _ -> Just $ TFunction
 --            (mkUnion (map fst functions))
 --            (mkIntersection (map snd functions))
+
+-- | Normalize a constraint by normalizing both sides of subtype relation
+normalizeConstraint :: (MonadError TypeError m) => Constraint -> m Constraint
+normalizeConstraint (Subtype t1 t2) = liftA2 Subtype (normalize t1) (normalize t2)

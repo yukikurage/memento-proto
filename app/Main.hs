@@ -10,7 +10,7 @@ import Language.Memento.Codegen (generateJS)
 import Language.Memento.CodegenWASM (generateWASM)
 import Language.Memento.LowerToIR (lowerProgram, lowerProgramWithTypes)
 import Language.Memento.Parser (parseProgramText)
-import Language.Memento.TypeSolver (typeCheckAST)
+import Language.Memento.TypeSolver (inferTypes)
 
 import Language.Memento.TypeSolver.Types (formatTypeEnv, formatTypeError)
 import System.Directory (createDirectoryIfMissing)
@@ -58,7 +58,7 @@ compileFile backend inputFile maybeOutputFile = do
   case parseProgramText input of
     Left err -> hPutStrLn stderr $ "Parse error: " ++ show err
     Right program -> do
-      case typeCheckAST program of
+      case inferTypes program of
         Left err -> hPutStrLn stderr $ "Type error: " ++ T.unpack (formatTypeError err)
         Right typeEnv -> do
           putStrLn "Type checking successful"

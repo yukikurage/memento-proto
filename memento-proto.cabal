@@ -74,7 +74,6 @@ library
     Language.Memento.Syntax.Variable
     Language.Memento.TypeSolver
     Language.Memento.TypeSolver.Assumption
-    Language.Memento.TypeSolver.ConstraintGen
     Language.Memento.TypeSolver.ConstraintGenerator
     Language.Memento.TypeSolver.DataTypeAnalysis
     Language.Memento.TypeSolver.Normalize
@@ -82,10 +81,9 @@ library
     Language.Memento.TypeSolver.SolverPipeline
     Language.Memento.TypeSolver.Subtype
     Language.Memento.TypeSolver.TypeEnvironment
+    Language.Memento.TypeSolver.TypeInference
     Language.Memento.TypeSolver.Types
-    Language.Memento.TypeSolver.Variance
     Language.Memento.TypeSolver.VarianceAnalysis
-    Language.Memento.TypeSolver.VarianceSolver
   other-modules:
     Paths_memento_proto
   hs-source-dirs:

@@ -20,7 +20,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace, traceM)
 import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decomposeAssumptionAll)
-import Language.Memento.TypeSolver.Normalize
+import Language.Memento.TypeSolver.Normalize (normalize, normalizeConstraint)
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
 import Safe
@@ -450,8 +450,6 @@ checkContradictions varMap genMap cs = mapM_ check $ Set.toList cs
     | otherwise = do
         pure ()
 
-normalizeConstraint :: (MonadError TypeError m) => Constraint -> m Constraint
-normalizeConstraint (Subtype t1 t2) = liftA2 Subtype (normalize t1) (normalize t2)
 
 -- Remove reflexive constraints and other trivial constraints
 filterTrivialConstraints :: ConstraintSet -> ConstraintSet

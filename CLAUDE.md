@@ -15,7 +15,7 @@ Memento is an experimental functional programming language compiler written in H
 
 ## NOTE
 
-This project is in active development, and the architecture is evolving. You can remove legacy code or unused features as needed. The focus is on building a more composable and extensible architecture.
+This project is in active development, and the architecture is evolving. You must remove legacy code or unused features as needed. The focus is on building a more composable and extensible architecture.
 
 ## Development Commands
 
@@ -51,14 +51,14 @@ stack test
 - `src/Language/Memento/`:
   - `Parser/`: Megaparsec-based parser for `.mmt` files
   - `Syntax/`: AST definitions and language syntax structures
-  - `TypeChecker/`: Type inference system (currently disabled in Main.hs:26-31)
+  - `TypeSolver/`: Modular constraint-based type inference system
   - `Codegen/`: JavaScript code generation from AST
   - `Data/`: Higher-kinded data structures (HFunctor, HFix, HFoldable)
 
 ### Key Design Patterns
 
 - **Higher-Kinded Data**: Uses HFunctor pattern for extensible AST
-- **Type Solver**: New constraint-based type solver with union/intersection types
+- **Type Solver**: Modular constraint-based type solver with union/intersection types
 - **Parser Combinators**: Megaparsec for parsing
 - **Type Inference**: Advanced type solver supporting subtyping, unions, intersections, and polymorphism
 
@@ -68,28 +68,113 @@ The language uses a modern functional syntax with type annotations.
 
 ## Current Development Status
 
-- **Branch**: `more-composable-architecture`
-- **Type Solver**: New constraint-based type solver implemented (see src/Language/Memento/TypeSolver/)
-- **Type Checker**: Original type checker disabled, replaced with new type solver
-- **Recent Focus**: Polymorphism, pattern matching, and advanced type system features
+- **Branch**: `wasm-backend`
+- **Type Solver**: Fully refactored modular architecture (December 2024)
+- **Type Checker**: Original type checker replaced with modular type solver
+- **Recent Focus**: Type solver refactoring for composability and parallel processing capabilities
+- **Architecture**: Completed transition to pure functional, composable type solver components
 
-## Type Solver Architecture
+## Type Solver Architecture (Refactored - December 2024)
 
-The new type solver implements the algorithm described in `docs/TYPE_SOLVER.md`:
+The type solver has been completely refactored into a modular, composable architecture:
 
-- **Constraint Generation**: Creates subtype constraints from expressions (`ConstraintGen.hs`)
-- **Constraint Solving**: Multi-step algorithm with decomposition, contradiction checking, and branch splitting
-- **Type Normalization**: Simplifies union/intersection types using algebraic laws
-- **Subtyping**: Supports structural subtyping with contravariance for functions
-- **AST Integration**: Full integration with Memento's higher-order functor AST structure
-- **Variance Solver**: Recursive equation solver for determining variance of type parameters (`VarianceSolver.hs`)
-  - Generates variance equations from data type definitions
-  - Uses fixed-point iteration to solve recursive variance relationships
+### Core Components
+
+- **DataTypeAnalysis.hs**: Pure data type extraction from AST
+
+  - Analyzes constructor signatures and type parameter relationships
+  - Eliminates need for stateful data type collection
+  - Provides foundation for variance analysis
+
+- **VarianceAnalysis.hs**: AST-aware variance computation (replaces old VarianceSolver.hs)
+
+  - Works directly with actual type parameter names from AST
+  - Uses fixed-point iteration to solve recursive variance equations
   - Correctly handles covariant, contravariant, invariant, and bivariant positions
+
+- **ConstraintGenerator.hs**: Pure constraint generation
+
+  - Separates constraint generation from stateful type checking
+  - Enables independent testing and parallel processing
+  - Provides pure functional interface for constraint creation
+
+- **TypeEnvironment.hs**: Immutable type environment management
+
+  - Handles scoping, polymorphic types, and environment composition
+  - Supports nested scopes with proper variable shadowing
+  - Enables composable type environment building
+
+- **SolverPipeline.hs**: Modular solver stages
+
+  - Breaks solving into composable, testable stages
+  - Enables pipeline customization and debugging
+  - Prepares foundation for parallel constraint solving
+
+- **TypeInference.hs**: Main type inference orchestrator (renamed from ConstraintGen.hs)
+  - Orchestrates the complete type inference pipeline using modular components
+  - Handles polymorphic type processing and constraint generation coordination
+  - Provides clean interface: `inferTypes` function as main entry point
+
+### Core Solver Components
+
+- **SolverPipeline.hs**: Modular multi-step algorithm with composable stages for decomposition, contradiction checking, and branch splitting
+- **Types.hs**: Core type definitions and utilities
+- **Subtype.hs**: Structural subtyping with contravariance for functions
+- **Normalize.hs**: Type normalization using algebraic laws
+- **Assumption.hs**: Generic bounds calculation and decomposition
+
+### Architecture Benefits
+
+- **Pure Functional Design**: Most components are now pure functions
+- **Composability**: Each module can be tested and reused independently
+- **Parallel Processing Ready**: Pure components enable future parallel type checking
+- **Maintainability**: Clear separation of concerns and reduced coupling
+- **Testability**: Each stage can be unit tested in isolation
+- **Simplified Interface**: Clean, direct API with single entry point (`inferTypes`)
+- **No Legacy Code**: All version-indicating names and backward compatibility code removed
+
+### Parallel Processing (Future Enhancement)
+
+The refactored architecture is designed to enable parallel type checking in the future:
+
+#### Parallel-Ready Components
+
+- **DataTypeAnalysis**: Pure analysis can be parallelized across modules
+- **VarianceAnalysis**: Independent variance computation for each data type
+- **ConstraintGenerator**: Pure constraint generation can be parallelized per definition
+- **SolverPipeline**: Modular stages can be run in parallel for independent constraints
+
+#### Future Parallel Implementation Strategy
+
+```haskell
+-- Example parallel type checking pipeline
+parallelTypeCheck :: [AST KProgram] -> Par (Map.Map T.Text TypeScheme)
+parallelTypeCheck modules = do
+  -- Phase 1: Parallel data type analysis
+  dataAnalyses <- parMap analyzeDataTypes modules
+
+  -- Phase 2: Parallel variance computation
+  varianceAnalyses <- parMap analyzeVariances dataAnalyses
+
+  -- Phase 3: Parallel constraint generation
+  constraints <- parMap generateConstraints modules
+
+  -- Phase 4: Solve constraints (potentially in parallel for independent chunks)
+  solve (mergeConstraints constraints)
+```
+
+#### Benefits of Future Parallel Processing
+
+- **Faster Compilation**: Multiple modules processed simultaneously
+- **Better Resource Utilization**: Multi-core CPU usage
+- **Scalable Architecture**: Performance improves with hardware
+- **Independent Processing**: Each module's type checking is isolated
+
+**Note**: Parallel processing is postponed for now as the language is under active development, but the modular architecture makes it feasible when needed.
 
 ## Supported Language Features
 
-The constraint generator now supports:
+The type solver supports:
 
 - ✅ **Value declarations**: `val x : number = 42;`
 - ✅ **Function definitions**: `(input : number) => input * 2`
@@ -184,7 +269,10 @@ data Result [
 - When modifying the parser, test with examples in `examples/` directory
 - JavaScript output goes to `dist/js/` directory
 - Full AST type checking enabled in Main.hs with `typeCheckAST`
-- Type solver modules: Types, Solver, Subtype, Normalize, ConstraintGen, VarianceSolver, Demo
+- **Active type solver modules**: Types, Solver, Subtype, Normalize, ConstraintGen (refactored), DataTypeAnalysis, VarianceAnalysis
+- **New modular components**: ConstraintGenerator, TypeEnvironment, SolverPipeline, PipelineCoordinator (simplified)
+- **Removed obsolete modules**: VarianceSolver.hs, Variance.hs (replaced by VarianceAnalysis.hs)
+- **Refactoring Status**: Legacy code completely replaced with modular architecture (December 2024)
 - Pattern matching examples: `exhaustivity_fail_test.mmt`, `pattern_bounds_test.mmt`
 - Variance solver uses fixed-point iteration on a finite lattice (Bivariant < Covariant, Contravariant < Invariant)
 - Type constructor information stored in `TypeConstructorInfo` with variance data
@@ -283,7 +371,7 @@ data Box [
   MkBox<T> : (value : T) => Box<T>
 ];
 
-// Contravariant: T appears only in negative positions  
+// Contravariant: T appears only in negative positions
 data Consumer [
   MkConsumer<T> : (consume : (x : T) => number) => Consumer<T>
 ];
