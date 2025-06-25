@@ -1,5 +1,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use lambda-case" #-}
 
 -- | Constraint generation for the Memento type solver
 module Language.Memento.TypeSolver.ConstraintGen (
@@ -7,7 +10,7 @@ module Language.Memento.TypeSolver.ConstraintGen (
   typeCheckAST,
 ) where
 
-import Control.Monad (foldM, unless, when, zipWithM, zipWithM_)
+import Control.Monad (foldM, forM, unless, when, zipWithM, zipWithM_)
 import Control.Monad.State
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
@@ -67,18 +70,14 @@ data TypeConstructorInfo = TypeConstructorInfo
   }
   deriving (Show, Eq)
 
-type InferM = StateT InferContext (Except String)
+type InferM = StateT InferContext (Except TypeError)
 
 -- ============================================================================
 -- Main Entry Points
 -- ============================================================================
 
-typeCheckAST :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
-typeCheckAST = inferProgram
-
--- | Two-phase type checking: collect types first, then check bodies
-inferProgram :: AST KProgram -> Either String (Map.Map T.Text TypeScheme)
-inferProgram ast = do
+typeCheckAST :: AST KProgram -> Either TypeError (Map.Map T.Text TypeScheme)
+typeCheckAST ast =
   let initialCtx =
         InferContext
           { icVarCounter = 0
@@ -90,41 +89,18 @@ inferProgram ast = do
           , icGenericTypes = Map.empty
           , icAssumptions = Set.empty
           }
+   in runExcept (evalStateT (inferProgram ast) initialCtx)
 
+-- | Two-phase type checking: collect types first, then check bodies
+inferProgram :: AST KProgram -> InferM (Map.Map T.Text TypeScheme)
+inferProgram ast = do
   case unProgram (extractSyntax ast) of
     SProgram.Program declAsts -> do
       -- Phase 1: Collect all definition types and data constructors
-      case runExcept (runStateT (collectAllDefinitionTypes declAsts) initialCtx) of
-        Left err -> Left err
-        Right ((), phaseOneCtx) -> do
-          -- Phase 2: Check each definition body individually
-          checkAllDefinitionBodies declAsts phaseOneCtx
- where
-  -- Phase 1: Collect all val types and data types into environment
-  collectAllDefinitionTypes :: [AST KDefinition] -> InferM ()
-  collectAllDefinitionTypes declAsts = mapM_ collectDefinitionType declAsts
-
-  -- Phase 2: Check each definition body with full environment available
-  checkAllDefinitionBodies :: [AST KDefinition] -> InferContext -> Either String (Map.Map T.Text TypeScheme)
-  checkAllDefinitionBodies declAsts baseCtx = do
-    -- Check each definition body individually
-    results <- mapM (checkSingleDefinition baseCtx) declAsts
-    -- Return the final type environment (same as phase 1 since we only check, don't add new types)
-    return (icTypeEnv baseCtx)
-
-  -- Check if constraint contains generic types
-  constraintContainsGeneric :: Constraint -> Bool
-  constraintContainsGeneric (Subtype t1 t2) =
-    typeIsPurelyGeneric t1 && typeIsPurelyGeneric t2
-   where
-    typeIsPurelyGeneric t = typeContainsGeneric t && not (containsVar t)
-
-    typeContainsGeneric (TGeneric _) = True
-    typeContainsGeneric (TFunction args ret) = any typeContainsGeneric args || typeContainsGeneric ret
-    typeContainsGeneric (TUnion ts) = any typeContainsGeneric (Set.toList ts)
-    typeContainsGeneric (TIntersection ts) = any typeContainsGeneric (Set.toList ts)
-    typeContainsGeneric (TApplication _ args) = any typeContainsGeneric args
-    typeContainsGeneric _ = False
+      mapM_ collectDefinitionType declAsts
+      -- Phase 2: Check each definition body individually
+      mapM_ (withIsolatedEnv . checkSingleDefinition) declAsts
+      gets icTypeEnv
 
 -- ============================================================================
 -- Type algebras
@@ -138,6 +114,13 @@ appendTypeConstructorInfo (TypeConstructorInfo k1 v1 cs1) (TypeConstructorInfo k
 -- ============================================================================
 -- Core Inference Operations
 -- ============================================================================
+
+withIsolatedEnv :: (MonadState env m) => m a -> m a
+withIsolatedEnv f = do
+  ctx <- get
+  result <- f
+  put ctx
+  return result
 
 freshVar :: InferM TypeVar
 freshVar = do
@@ -207,7 +190,8 @@ restoreAssumptions assumptions = modify $ \ctx -> ctx{icAssumptions = assumption
 -- ============================================================================
 
 convertMType :: AST KType -> InferM Type
-convertMType ast =
+convertMType ast = do
+  let meta = extractMetadata ast
   case unMType (extractSyntax ast) of
     SMType.TNumber -> return TNumber
     SMType.TInt -> return TNumber
@@ -239,7 +223,7 @@ convertMType ast =
                       return $ TGeneric g
                     Nothing -> do
                       -- Var is not a generic type nor type constructor, then throw an error
-                      throwError $ "Unknown type variable: " ++ T.unpack name
+                      throwError $ UnboundTypeVariable (Just meta) name
     SMType.TLiteral litAst ->
       return $ convertLiteral litAst
     SMType.TFunction params retType -> do
@@ -261,9 +245,10 @@ convertMType ast =
           -- If the base is a type constructor, we need to instantiate it with arguments
           when (k /= length argAsts) $
             throwError $
-              "Type constructor " ++ T.unpack baseName ++ " expects " ++ show k ++ " arguments, got " ++ show (length argAsts)
+              SomeTypeError $
+                "Type constructor " <> baseName <> " expects " <> T.pack (show k) <> " arguments, got " <> T.pack (show (length argAsts))
         Nothing | Set.member baseName (icTemporaryTypeConstructors ctx) -> pure ()
-        Nothing -> throwError $ "Unknown type variable: " ++ T.unpack baseName
+        Nothing -> throwError $ UnboundTypeVariable (Just meta) $ baseName
 
       argTypes <- mapM convertMType argAsts
       return $ TApplication baseName argTypes
@@ -284,7 +269,7 @@ instantiatePolymorphicType (TypeScheme vars typ) = do
   --      val a : number = id(1)  // Usage <- this time, T is substituted by fresh variable (that will be resolved to "number" by solver)
   freshVars <- mapM (const freshVar) vars
   let substitution = Map.fromList (zip vars (map TVar freshVars))
-  return $ substituteGenerics substitution typ
+  substGenerics substitution typ
 
 -- | Instantiate with fresh generics for GADT pattern matching
 instantiatePolymorphicTypeWithScopeAwareness :: TypeScheme -> InferM Type
@@ -293,7 +278,7 @@ instantiatePolymorphicTypeWithScopeAwareness (TypeScheme vars typ) = do
   -- For GADT pattern matching, we need fresh generics, not type variables
   freshGenericNames <- mapM freshGenericsWithPrefix vars
   let substitution = Map.fromList (zip vars (map TGeneric freshGenericNames))
-  return $ substituteGenerics substitution typ
+  substGenerics substitution typ
 
 -- ============================================================================
 -- Phase 1: Type Collection
@@ -320,11 +305,13 @@ collectDefinitionType ast =
           foldM
             ( \acc info -> case appendTypeConstructorInfo acc info of
                 Just newInfo -> return newInfo
-                Nothing -> throwError $ "Cannot combine type constructor infos: " ++ show acc ++ " and " ++ show info
+                Nothing -> throwError $ SomeTypeError $ "Cannot combine type constructor infos: " <> T.pack (show acc) <> " and " <> T.pack (show info)
             )
             (head tcInfos)
             (tail tcInfos)
         modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
+
+      traceM $ "Collected type constructor info for " <> T.unpack dataName <> ": " <> show tcInfos
 
       -- Remove temporary context
       modify $ \ctx ->
@@ -370,12 +357,12 @@ collectDefinitionType ast =
 -- ============================================================================
 
 -- | Phase 2: Check a single definition body with full environment available
-checkSingleDefinition :: InferContext -> AST KDefinition -> Either String ()
-checkSingleDefinition baseCtx ast =
+checkSingleDefinition :: AST KDefinition -> InferM ()
+checkSingleDefinition ast =
   case unDefinition (extractSyntax ast) of
     SDefinition.ValDef varAst typeParams typeAst exprAst -> do
       let SVariable.Var name = unVariable (extractSyntax varAst)
-      checkPolymorphicValBody baseCtx name typeParams typeAst exprAst
+      checkPolymorphicValBody name typeParams typeAst exprAst
     SDefinition.DataDef _ _ ->
       -- Data definitions already processed in phase 1
       return ()
@@ -383,20 +370,13 @@ checkSingleDefinition baseCtx ast =
       -- Type definitions already processed in phase 1
       return ()
  where
-  checkPolymorphicValBody baseCtx name typeParams typeAst exprAst = do
-    -- Create isolated context for this definition
-    let isolatedCtx = baseCtx{icConstraints = Set.empty, icAssumptions = Set.empty}
+  checkPolymorphicValBody name typeParams typeAst exprAst = do
+    checkValBody name typeParams typeAst exprAst
+    finalCtx <- get
+    let constraints = icConstraints finalCtx
+        varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
 
-    case runExcept (runStateT (checkValBody name typeParams typeAst exprAst) isolatedCtx) of
-      Left err -> Left $ "In definition of " ++ T.unpack name ++ ": " ++ err
-      Right ((), finalCtx) -> do
-        let constraints = icConstraints finalCtx
-            varMap = Map.map (\(TypeConstructorInfo _ variances _) -> variances) $ icTypeConstructors finalCtx
-
-        case solve varMap (icAssumptions finalCtx) constraints of
-          Success -> return ()
-          Contradiction msg ->
-            Left $ "Type error in " ++ T.unpack name ++ ": " ++ msg ++ "\n" ++ formatConstraintSet constraints
+    solve varMap (icAssumptions finalCtx) constraints
 
   checkValBody name typeParams typeAst exprAst = do
     let paramNames =
@@ -447,11 +427,13 @@ inferDecl ast =
           foldM
             ( \acc info -> case appendTypeConstructorInfo acc info of
                 Just newInfo -> return newInfo
-                Nothing -> throwError $ "Cannot combine type constructor infos: " ++ show acc ++ " and " ++ show info
+                Nothing -> throwError $ SomeTypeError $ "Cannot combine type constructor infos: " <> T.pack (show acc) <> " and " <> T.pack (show info)
             )
             (head tcInfos)
             (tail tcInfos)
         modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
+
+      traceM $ show tcInfos
 
       -- Remove temporary context
       modify $ \ctx ->
@@ -539,15 +521,14 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
         TApplication dn typeParams | dn == dataName -> do
           let tciKind = length typeParams
           varMap <- getTypeConstructorVariances
-          let tciVariance =
-                [ variance
-                | typeParam <- typeParams
-                , let variance = case typeParam of
-                        TGeneric varName -> foldr (combineVariance . analyzeVariance varMap varName) Bivariant argTypes
-                        _ -> Invariant
-                ]
+          tciVariance <- forM typeParams $ \typeParam -> case typeParam of
+            TGeneric varName -> do
+              analyzedVariances <- forM argTypes $ analyzeVariance varMap varName
+              pure $ sumVariance analyzedVariances
+            _ -> pure Invariant
           let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme
+          traceM $ "Analyzed variances for " <> T.unpack dn <> ": " <> show tciVariance
           return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
         TVar (TypeVar dn) | dn == dataName -> do
           -- Zero-argument type constructor case
@@ -556,9 +537,9 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
           let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme
           return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
-        _ -> throwError $ "Constructor return type doesn't match data type name. Expected: " ++ T.unpack dataName ++ ", got: " ++ show retType
+        _ -> throwError $ TypeMismatch Nothing (TVar (TypeVar dataName)) retType
     Nothing ->
-      throwError $ "Constructor type must be a function, got: " ++ show fullType
+      throwError $ SomeTypeError $ "Constructor type must be a function, got: " <> formatType fullType
  where
   unfoldFunctionType :: Type -> Maybe ([Type], Type)
   unfoldFunctionType (TFunction argTypes returnType) = Just (argTypes, returnType)
@@ -569,14 +550,15 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
 -- ============================================================================
 
 inferExpr :: AST KExpr -> InferM Type
-inferExpr ast =
+inferExpr ast = do
+  let meta = extractMetadata ast
   case unExpr (extractSyntax ast) of
     EVar varAst -> do
       let SVariable.Var name = unVariable (extractSyntax varAst)
       ctx <- get
       case Map.lookup name (icTypeEnv ctx) of
         Just scheme -> instantiatePolymorphicType scheme
-        Nothing -> errorWithPosition ast $ "Unbound variable: " ++ T.unpack name
+        Nothing -> throwError $ UnboundTypeVariable (Just meta) name
     ELiteral litAst -> return $ convertLiteral litAst
     ELambda params bodyAst -> do
       savedEnv <- gets icTypeEnv
@@ -623,12 +605,6 @@ inferExpr ast =
 
       return resultType
  where
-  errorWithPosition :: AST a -> String -> InferM b
-  errorWithPosition ast message =
-    let (start, _) = case unHFix ast of
-          (Metadata start end :*: _) -> (start, end)
-     in throwError $ message ++ " at " ++ show start
-
   convertLiteral :: AST KLiteral -> Type
   convertLiteral ast =
     case unLiteral (extractSyntax ast) of
@@ -648,7 +624,7 @@ inferExpr ast =
         return paramType
       SPattern.PWildcard ->
         return paramType
-      _ -> errorWithPosition patAst "Complex patterns not yet supported in lambda"
+      _ -> throwError $ SomeTypeError "Complex patterns not yet supported in lambda"
 
   inferBinOp :: SBinOp.BinOp f a -> Type -> Type -> InferM Type
   inferBinOp op leftType rightType = case op of
@@ -688,7 +664,7 @@ inferExpr ast =
           addVar name declaredType
         SPattern.PWildcard ->
           return ()
-        _ -> errorWithPosition patAst "Complex patterns not yet supported in let"
+        _ -> throwError $ SomeTypeError "Complex patterns not yet supported in let"
 
 -- NOTE: After this line, the code may be incomplete or not fully functional.
 
@@ -699,28 +675,14 @@ inferExpr ast =
 inferMatchCase :: [Type] -> Type -> (List (AST KPattern, Maybe (AST KType)), AST KExpr) -> InferM ()
 inferMatchCase scrutineeTypes resultType (patterns, resultExpr) = do
   savedEnv <- gets icTypeEnv
-  -- savedAssumptions <- saveAssumptions
 
-  -- Process patterns and generate GADT assumptions
   zipWithM_ inferPattern patterns scrutineeTypes
-
-  -- Infer result with assumptions in scope
   caseResultType <- inferExpr resultExpr
 
-  -- Check for escaping existentials
   ctx <- get
   let resultVars = typeVars caseResultType
-  -- assumptionVars = Set.unions (map typeVars (Map.elems (icAssumptions ctx)))
-  -- escapingVars = Set.intersection resultVars assumptionVars
-
-  -- when (not (Set.null escapingVars)) $
-  --   throwError $
-  --     "Existential types cannot escape their scope: " ++ show (Set.toList escapingVars)
-
   addConstraint $ Subtype caseResultType resultType
 
-  -- Restore environment and assumptions after case
-  -- restoreAssumptions savedAssumptions
   modify $ \ctx -> ctx{icTypeEnv = savedEnv}
  where
   inferPattern (patAst, mTypeAst) scrutineeType = do

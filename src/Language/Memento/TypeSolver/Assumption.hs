@@ -19,8 +19,6 @@ calculateGenericBounds :: TypeConstructorVariances -> AssumptionSet -> GenericBo
 calculateGenericBounds varMap assumptions =
   -- trace ("calculateGenericBounds: assumptions = " ++ show assumptions) $
   let
-    decomposed = decomposeAssumptionAll varMap assumptions
-
     takeUpper :: T.Text -> Constraint -> Maybe Type
     takeUpper name cns = case cns of
       Subtype (TGeneric n) t2 | name == n -> Just t2
@@ -31,8 +29,8 @@ calculateGenericBounds varMap assumptions =
       Subtype t1 (TGeneric n) | name == n -> Just t1
       _ -> Nothing
 
-    takeUppers name = mapMaybe (takeUpper name) $ Set.toList decomposed
-    takeLowers name = mapMaybe (takeLower name) $ Set.toList decomposed
+    takeUppers name = mapMaybe (takeUpper name) $ Set.toList assumptions
+    takeLowers name = mapMaybe (takeLower name) $ Set.toList assumptions
 
     generics =
       mapMaybe
@@ -41,7 +39,7 @@ calculateGenericBounds varMap assumptions =
             Subtype _ (TGeneric n) -> Just n
             _ -> Nothing
         )
-        $ Set.toList decomposed
+        $ Set.toList assumptions
    in
     Map.fromList $
       map
@@ -92,7 +90,7 @@ decomposeAssumption varMap cns = case cns of
     | tc1 == tc2
     , Just variances <- Map.lookup tc1 varMap
     , length args1 == length args2 ->
-        let argAssumptions = Set.unions $ zipWith3 mkAssumption variances args2 args1
+        let argAssumptions = Set.unions $ zipWith3 mkAssumption variances args1 args2
             mkAssumption variance arg1 arg2 =
               case variance of
                 Covariant -> Set.singleton $ Subtype arg1 arg2 -- Covariant

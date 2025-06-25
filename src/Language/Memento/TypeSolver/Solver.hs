@@ -1,8 +1,8 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 {-# HLINT ignore "Replace case with maybe" #-}
+{-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Language.Memento.TypeSolver.Solver where
 
@@ -12,6 +12,7 @@ Based on the docs/TYPE_SOLVER.md
 
 import Control.Monad (foldM)
 
+import Control.Monad.Error.Class (MonadError (catchError, throwError))
 import Data.Either (partitionEithers)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
@@ -22,47 +23,74 @@ import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decompose
 import Language.Memento.TypeSolver.Normalize
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
+import Safe
 
-solve :: TypeConstructorVariances -> AssumptionSet -> ConstraintSet -> SolveResult
-solve varMap assumptions cs =
-  let normalized = Set.map normalizeConstraint cs
-      (substedAssumptions, substed) = substInstancesAsPossible (assumptions, normalized) -- Try to substitute instances as much as possible
-      genBndMap = calculateGenericBounds varMap substedAssumptions -- Calculate generic bounds from assumptions
-   in -- trace
-      --   ("SOLVE Branch: " ++ formatConstraintSet substed ++ "\n" ++ "SOLVE Branch (Assumptions): " ++ formatConstraintSet substedAssumptions ++ "\n")
-      case decomposeConstraintsAll varMap genBndMap substed of
-        Left err -> Contradiction err
-        Right remaining ->
-          -- trace
-          --  ("SOLVE Remaining: " ++ formatConstraintSet remaining ++ "\n")
-          case branchConstraints varMap substedAssumptions remaining of
-            Nothing ->
-              -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
-              case checkContradictions varMap genBndMap (calculatePropagationAll remaining) of
-                Left err -> Contradiction err
-                Right () -> Success
-            Just branches ->
-              -- trace ("SOLVE Next Branches: " ++ show branches ++ "\n") $
-              let branchResults = map (uncurry (solve varMap)) branches
-               in if Success `elem` branchResults
-                    then Success
-                    else Contradiction $ "All branches failed: " ++ show (filter (/= Success) branchResults)
+solve :: (MonadError TypeError m) => TypeConstructorVariances -> AssumptionSet -> ConstraintSet -> m ()
+solve varMap assumptions constraints = do
+  traceM ("solve: initial assumptions = " ++ T.unpack (formatConstraintSet assumptions))
+  traceM ("solve: initial constraints = " ++ T.unpack (formatConstraintSet constraints))
+  normalizedConstraints <- Set.fromList <$> mapM normalizeConstraint (Set.toList constraints)
+  normalizedAssumptions <- Set.fromList <$> mapM normalizeConstraint (Set.toList assumptions)
+  let
+    decomposedAssumptionsFirst = decomposeAssumptionAll varMap normalizedAssumptions
+    genBndMapFirst = calculateGenericBounds varMap decomposedAssumptionsFirst -- Calculate generic bounds from assumptions
+  traceM ("solve: decomposedAssumptionsFirst = " ++ T.unpack (formatConstraintSet decomposedAssumptionsFirst))
+  traceM ("solve: genBndMapFirst = " ++ show genBndMapFirst)
+  decomposedConstraintsFirst <- decomposeConstraintsAll varMap genBndMapFirst normalizedConstraints
+  traceM ("solve: decomposedConstraintsFirst = " ++ T.unpack (formatConstraintSet decomposedConstraintsFirst))
+  let
+    (substedAssumptions, substedConstraints) = substInstancesAsPossible (decomposedAssumptionsFirst, decomposedConstraintsFirst) -- Try to substitute instances as much as possible
+    decomposedAssumptionsSecond = decomposeAssumptionAll varMap substedAssumptions -- Decompose assumptions again after substitution
+    genBndMapSecond = calculateGenericBounds varMap $ decomposedAssumptionsSecond -- Calculate generic bounds from assumptions
+  traceM ("solve: decomposedAssumptionsSecond = " ++ T.unpack (formatConstraintSet decomposedAssumptionsSecond))
+  traceM ("solve: genBndMapSecond = " ++ show genBndMapSecond)
+  decomposedConstraintsSecond <- decomposeConstraintsAll varMap genBndMapSecond substedConstraints
+  traceM ("solve: decomposedConstraintsSecond = " ++ T.unpack (formatConstraintSet decomposedConstraintsSecond))
+
+  case branchConstraints varMap decomposedAssumptionsSecond decomposedConstraintsSecond of
+    Nothing -> do
+      -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
+      checkContradictions varMap genBndMapSecond $ calculatePropagationAll decomposedConstraintsSecond
+    Just branches -> do
+      branchResults <- untilSuccess branches $ uncurry (solve varMap)
+      case branchResults of
+        Right _ -> return () -- At least one branch succeeded
+        Left errors -> throwError $ head errors -- All branches failed, return the first error
+
+-- | Run a function until it succeeds or all inputs are exhausted
+untilSuccess :: (MonadError e m) => [a] -> (a -> m b) -> m (Either [e] b)
+untilSuccess xs f = case xs of
+  [] -> pure $ Left []
+  (x : xs') -> do
+    result <- (Right <$> f x) `catchError` \e -> pure $ Left e
+    case result of
+      Right v -> pure $ Right v -- Success, return the value
+      Left e -> do
+        restResult <- untilSuccess xs' f -- Try the rest of the inputs
+        case restResult of
+          Right v -> pure $ Right v -- Found a success in the rest
+          Left es -> pure $ Left (e : es) -- Collect errors
 
 {- | Repeat decomposition while there are still constraints to decompose
 | All remaining may be "BRANCH" or "BOUND" pair (ref: DECOMPOSE.md)
 -}
-decomposeConstraintsAll :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String ConstraintSet
+decomposeConstraintsAll ::
+  (MonadError TypeError m) =>
+  TypeConstructorVariances ->
+  GenericBoundsMap ->
+  ConstraintSet ->
+  m ConstraintSet
 decomposeConstraintsAll varMap bounds cs = do
   -- traceM ("decomposeConstraintsAll: constraints = " ++ formatConstraintSet cs)
   (decomposed, remaining) <- decomposeConstraints varMap bounds cs
   if Set.null remaining
-    then Right decomposed -- No more constraints to decompose
+    then pure decomposed -- No more constraints to decompose
     else do
       nextDecomposed <- decomposeConstraintsAll varMap bounds remaining
-      Right (Set.union decomposed nextDecomposed)
+      pure (Set.union decomposed nextDecomposed)
 
 -- Step 1: Decompose constraints
-decomposeConstraints :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String (ConstraintSet, ConstraintSet)
+decomposeConstraints :: (MonadError TypeError m) => TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> m (ConstraintSet, ConstraintSet)
 decomposeConstraints varMap bounds cs =
   fmap (\css -> (Set.unions $ map fst css, Set.unions $ map snd css)) $
     mapM (decomposeConstraint varMap bounds) $
@@ -72,40 +100,39 @@ decomposeConstraints varMap bounds cs =
 | NOTE: DECOMPOSE.md
 | Return type : (branching later, currentlly decomposed)
 -}
-decomposeConstraint :: TypeConstructorVariances -> GenericBoundsMap -> Constraint -> Either String (ConstraintSet, ConstraintSet)
+decomposeConstraint :: (MonadError TypeError m) => TypeConstructorVariances -> GenericBoundsMap -> Constraint -> m (ConstraintSet, ConstraintSet)
 decomposeConstraint varMap bounds cns =
   -- trace ("decomposeConstraint: " ++ show cns ++ "\n") $
   case cns of
-    Subtype t1 t2 | t1 == t2 -> Right (Set.empty, Set.empty) -- Same type, no contradiction
-    Subtype TNever t2 -> Right (Set.empty, Set.empty) -- Never is a subtype of anything
-    Subtype t1 TUnknown -> Right (Set.empty, Set.empty) -- Unknown is a supertype of anything
+    Subtype t1 t2 | t1 == t2 -> pure (Set.empty, Set.empty) -- Same type, no contradiction
+    Subtype TNever t2 -> pure (Set.empty, Set.empty) -- Never is a subtype of anything
+    Subtype t1 TUnknown -> pure (Set.empty, Set.empty) -- Unknown is a supertype of anything
     -- If both sides are concrete (no type variables), check subtypes directly
-    Subtype (TGeneric name) t2 -> Right (Set.singleton cns, Set.empty)
+    Subtype (TGeneric name) t2 -> pure (Set.singleton cns, Set.empty)
     -- case Map.lookup name bounds of
     --   Just (GenericBounds _ uppers) -> Right (Set.empty, Set.fromList [Subtype upper t2 | upper <- uppers])
     --   Nothing -> Right (Set.singleton cns, Set.empty) -- No bounds info, leave for later
-    Subtype t1 (TGeneric name) -> Right (Set.singleton cns, Set.empty)
+    Subtype t1 (TGeneric name) -> pure (Set.singleton cns, Set.empty)
     -- case Map.lookup name bounds of
     --   Just (GenericBounds lowers _) -> Right (Set.empty, Set.fromList [Subtype t1 lower | lower <- lowers])
     --   Nothing -> Right (Set.singleton cns, Set.empty) -- No bounds info, leave for later
     Subtype t1 t2
-      | not (containsVar t1 || containsVar t2) ->
-          let result = isSubtypeWithBounds' varMap bounds t1 t2
-           in -- trace ("decomposeConstraint: " ++ formatType t1 ++ " <: " ++ formatType t2 ++ "~" ++ show result) $
-              if isSubtypeWithBounds' varMap bounds t1 t2
-                then Right (Set.empty, Set.empty) -- No contradiction, return empty set
-                else Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ ")"
-    Subtype (TUnion ts1) t2 -> Right (Set.empty, Set.fromList [Subtype t t2 | t <- Set.toList ts1]) -- Decompose union
-    Subtype t1 (TIntersection ts2) -> Right (Set.empty, Set.fromList [Subtype t1 t | t <- Set.toList ts2]) -- Decompose intersection
-    Subtype (TIntersection ts1) t2 -> Right (Set.singleton cns, Set.empty) -- Leave for world branching later
-    Subtype t1 (TUnion ts2) -> Right (Set.singleton cns, Set.empty) -- Leave for world branching later
-    Subtype (TVar var) t2 -> Right (Set.singleton (Subtype (TVar var) t2), Set.empty) -- Type variable, leave for branching or boundary check
-    Subtype t1 (TVar var) -> Right (Set.singleton (Subtype t1 (TVar var)), Set.empty) -- Type variable, leave for branching or boundary check
+      | not (containsVar t1 || containsVar t2) -> do
+          result <- isSubtype varMap bounds t1 t2
+          if result
+            then pure (Set.empty, Set.empty) -- No contradiction, return empty set
+            else throwError $ TypeNotSubtype Nothing t1 t2
+    Subtype (TUnion ts1) t2 -> pure (Set.empty, Set.fromList [Subtype t t2 | t <- Set.toList ts1]) -- Decompose union
+    Subtype t1 (TIntersection ts2) -> pure (Set.empty, Set.fromList [Subtype t1 t | t <- Set.toList ts2]) -- Decompose intersection
+    Subtype (TIntersection ts1) t2 -> pure (Set.singleton cns, Set.empty) -- Leave for world branching later
+    Subtype t1 (TUnion ts2) -> pure (Set.singleton cns, Set.empty) -- Leave for world branching later
+    Subtype (TVar var) t2 -> pure (Set.singleton (Subtype (TVar var) t2), Set.empty) -- Type variable, leave for branching or boundary check
+    Subtype t1 (TVar var) -> pure (Set.singleton (Subtype t1 (TVar var)), Set.empty) -- Type variable, leave for branching or boundary check
     Subtype (TApplication name1 args1) (TApplication name2 args2)
       | name1 == name2 && length args1 == length args2 -> case Map.lookup name1 varMap of
-          Nothing -> Left $ "No variance information for type constructor: " ++ show name1
+          Nothing -> throwError $ UnboundTypeVariable Nothing name1
           Just variances ->
-            Right
+            pure
               ( Set.empty
               , Set.fromList
                   [ constraint
@@ -115,13 +142,13 @@ decomposeConstraint varMap bounds cns =
               )
     Subtype (TFunction args1 ret1) (TFunction args2 ret2)
       | length args1 == length args2 ->
-          Right
+          pure
             ( Set.empty
             , Set.fromList $
                 [Subtype a2 a1 | (a1, a2) <- zip args1 args2]
                   ++ [Subtype ret1 ret2] -- Decompose function arguments and return type
             )
-    Subtype t1 t2 -> Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ "), while decomposing constraints"
+    Subtype t1 t2 -> throwError $ TypeNotSubtype Nothing t1 t2
 
 data Bounds = Bounds [Type] [Type]
 
@@ -220,27 +247,27 @@ calculateFullPropagation as cns =
     -- vars that are not nested
     nonNestedVars = (vars `Set.difference` nestedVars) `Set.difference` nestedVarsAs
    in
-    -- trace ("calculateFullPropagation: nonNestedVars = " ++ show nonNestedVars) $
-    if Set.null nonNestedVars
-      then Nothing -- No non-nested variables, no propagation
-      else
-        let targetNNV = head $ Set.toList nonNestedVars -- Take one non-nested variable
-            Bounds lowers uppers = calculateBounds targetNNV cns
-            newConstraints = [Subtype lower upper | lower <- lowers, upper <- uppers]
-            oldConstraintsRemoveNonNestedVars =
-              Set.filter
-                ( \case
-                    Subtype (TVar var1) (TVar var2) ->
-                      not $ Set.member var1 nonNestedVars || Set.member var2 nonNestedVars
-                    Subtype (TVar var) _ -> not $ Set.member var nonNestedVars
-                    Subtype _ (TVar var) -> not $ Set.member var nonNestedVars
-                    _ -> True
-                )
-                cns -- Remove constraints that involve non-nested vars
-         in Just $
-              Set.union
-                oldConstraintsRemoveNonNestedVars
-                (Set.fromList newConstraints) -- Add only truly new constraints
+    trace ("calculateFullPropagation: vars = " ++ show vars ++ ", nestedVars = " ++ show nestedVars ++ ", nestedVarsAs = " ++ show nestedVarsAs ++ ", nonNestedVars = " ++ show nonNestedVars) $
+      if Set.null nonNestedVars
+        then Nothing -- No non-nested variables, no propagation
+        else
+          let targetNNV = head $ Set.toList nonNestedVars -- Take one non-nested variable
+              Bounds lowers uppers = calculateBounds targetNNV cns
+              newConstraints = [Subtype lower upper | lower <- lowers, upper <- uppers]
+              oldConstraintsRemoveNonNestedVars =
+                Set.filter
+                  ( \case
+                      Subtype (TVar var1) (TVar var2) ->
+                        not $ Set.member var1 nonNestedVars || Set.member var2 nonNestedVars
+                      Subtype (TVar var) _ -> not $ Set.member var nonNestedVars
+                      Subtype _ (TVar var) -> not $ Set.member var nonNestedVars
+                      _ -> True
+                  )
+                  cns -- Remove constraints that involve non-nested vars
+           in Just $
+                Set.union
+                  oldConstraintsRemoveNonNestedVars
+                  (Set.fromList newConstraints) -- Add only truly new constraints
 
 -- Recursive call of calculateFullPropagation, while there is still non-nested vars
 calculateFullPropagationAll :: AssumptionSet -> ConstraintSet -> ConstraintSet
@@ -255,14 +282,20 @@ substInstancesAsPossible (as, cs) =
   -- trace ("substInstancesAsPossible: " ++ formatConstraintSet cs ++ "\n") $
   let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
       vars = Set.unions (Set.map constraintVars csFiltered)
-      boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
-      instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
-      -- Filter out self-substitutions (x <- x)
-      validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
-   in case Map.lookupMin validInstances of
+      -- boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
+      -- instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
+      -- -- Filter out self-substitutions (x <- x)
+      -- validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
+      mValidInstance =
+        headMay $
+          filter (\(var, instType) -> TVar var /= instType) $
+            mapMaybe
+              (\var -> (var,) <$> calculateInstanceFromBounds (calculateBounds var csFiltered))
+              (Set.toList vars)
+   in case mValidInstance of
         Just (var, instanceType) ->
-          let newCs = Set.map (applySubstConstraint (Map.singleton var instanceType)) csFiltered
-              newAs = Set.map (applySubstConstraint (Map.singleton var instanceType)) as
+          let newCs = applySubstConstraintSet var instanceType csFiltered
+              newAs = applySubstConstraintSet var instanceType as
            in substInstancesAsPossible (newAs, newCs) -- Recur with the new constraints
         Nothing -> (as, calculateFullPropagationAll as csFiltered)
 
@@ -270,17 +303,17 @@ substInstancesAsPossible (as, cs) =
 | with some nodes, may contain substitutions
 | Returned list represents branches with substitutions
 -}
-branchConstraint :: TypeConstructorVariances -> Constraint -> Maybe [(Substitution, ConstraintSet)]
+branchConstraint :: TypeConstructorVariances -> Constraint -> Maybe [([(TypeVar, Type)], ConstraintSet)]
 branchConstraint varMap cns = case cns of
   Subtype (TIntersection ts) t2 ->
-    Just [(Map.empty, Set.fromList [Subtype t t2]) | t <- Set.toList ts] -- Branch on intersection
+    Just [([], Set.fromList [Subtype t t2]) | t <- Set.toList ts] -- Branch on intersection
   Subtype t1 (TUnion ts) ->
-    Just [(Map.empty, Set.fromList [Subtype t1 t]) | t <- Set.toList ts] -- Branch on union
+    Just [([], Set.fromList [Subtype t1 t]) | t <- Set.toList ts] -- Branch on union
   Subtype (TVar var@(TypeVar varName)) (TFunction args ret) ->
     let argVars = [TVar $ TypeVar (varName <> "_arg_" <> T.pack (show n)) | n <- [1 .. length args]]
         retVar = TVar $ TypeVar (varName <> "_ret")
-        substIfNever = Map.singleton var TNever
-        substIfFunc = Map.singleton var (TFunction argVars retVar)
+        substIfNever = [(var, TNever)]
+        substIfFunc = [(var, TFunction argVars retVar)]
      in Just
           [
             ( substIfFunc
@@ -292,8 +325,8 @@ branchConstraint varMap cns = case cns of
   Subtype (TFunction args ret) (TVar var@(TypeVar varName)) ->
     let argVars = [TVar $ TypeVar (varName <> "_arg_" <> T.pack (show n)) | n <- [1 .. length args]]
         retVar = TVar $ TypeVar (varName <> "_ret")
-        substIfUnknown = Map.singleton var TUnknown
-        substIfFunc = Map.singleton var (TFunction argVars retVar)
+        substIfUnknown = [(var, TUnknown)]
+        substIfFunc = [(var, TFunction argVars retVar)]
      in Just
           [
             ( substIfFunc
@@ -305,8 +338,8 @@ branchConstraint varMap cns = case cns of
   Subtype (TVar var@(TypeVar varName)) (TApplication name args)
     | Just variances <- Map.lookup name varMap ->
         let argVars = [TVar $ TypeVar (varName <> "_arg_" <> T.pack (show n)) | n <- [1 .. length args]]
-            substIfNever = Map.singleton var TNever
-            substIfApp = Map.singleton var (TApplication name argVars)
+            substIfNever = [(var, TNever)]
+            substIfApp = [(var, TApplication name argVars)]
          in Just
               [
                 ( substIfApp
@@ -317,8 +350,8 @@ branchConstraint varMap cns = case cns of
   Subtype (TApplication name args) (TVar var@(TypeVar varName))
     | Just variances <- Map.lookup name varMap ->
         let argVars = [TVar $ TypeVar (varName <> "_arg_" <> T.pack (show n)) | n <- [1 .. length args]]
-            substIfUnknown = Map.singleton var TUnknown
-            substIfApp = Map.singleton var (TApplication name argVars)
+            substIfUnknown = [(var, TUnknown)]
+            substIfApp = [(var, TApplication name argVars)]
          in Just
               [
                 ( substIfApp
@@ -343,16 +376,24 @@ branchConstraints varMap as cs = case partitionFirst (branchConstraint varMap) (
     Just $
       map
         ( \(subst, cs') ->
-            ( Set.map (applySubstConstraint subst) $
-                Set.union
-                  (Set.fromList remaining)
-                  as
-            , Set.map
-                (applySubstConstraint subst)
-                $ Set.union (Set.fromList remaining) cs'
+            ( applySubstConstraintSetRecursive subst as
+            , applySubstConstraintSetRecursive subst $
+                Set.union (Set.fromList remaining) cs'
             )
         )
         branches
+
+applySubstRecursive :: [(TypeVar, Type)] -> Type -> Type
+applySubstRecursive subst t = case subst of
+  [] -> t -- No substitutions, return original type
+  ((var, instType) : rest) -> applySubstRecursive rest (applySubst var instType t)
+
+applySubstConstraintRecursive :: [(TypeVar, Type)] -> Constraint -> Constraint
+applySubstConstraintRecursive subst (Subtype t1 t2) =
+  Subtype (applySubstRecursive subst t1) (applySubstRecursive subst t2)
+
+applySubstConstraintSetRecursive :: [(TypeVar, Type)] -> ConstraintSet -> ConstraintSet
+applySubstConstraintSetRecursive subst = Set.map (applySubstConstraintRecursive subst)
 
 partitionFirst :: (a -> Maybe b) -> [a] -> Maybe (b, [a])
 partitionFirst f xs = go f xs []
@@ -397,21 +438,20 @@ calculatePropagationAll cs =
 | 3. var <: var
 | It is enough to check pattern 0, because 1, 2, 3 are already propagated to 0.
 -}
-checkContradictions :: TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> Either String ()
+checkContradictions :: (MonadError TypeError m) => TypeConstructorVariances -> GenericBoundsMap -> ConstraintSet -> m ()
 checkContradictions varMap genMap cs = mapM_ check $ Set.toList cs
  where
   check (Subtype t1 t2)
-    | not (containsVar t1 || containsVar t2) =
-        let result =
-              if isSubtypeWithBounds' varMap genMap t1 t2
-                then Right () -- No contradiction
-                else Left $ "Contradiction found: (" ++ formatType t1 ++ ") is not a subtype of (" ++ formatType t2 ++ ")"
-         in -- trace ("checkContradictions: " ++ formatType t1 ++ " <: " ++ formatType t2 ++ "~" ++ show result) $
-            result
-  check _ = Right ()
+    | not (containsVar t1 || containsVar t2) = do
+        result <- isSubtype varMap genMap t1 t2
+        if result
+          then pure ()
+          else throwError $ TypeNotSubtype Nothing t1 t2
+    | otherwise = do
+        pure ()
 
-normalizeConstraint :: Constraint -> Constraint
-normalizeConstraint (Subtype t1 t2) = Subtype (normalize t1) (normalize t2)
+normalizeConstraint :: (MonadError TypeError m) => Constraint -> m Constraint
+normalizeConstraint (Subtype t1 t2) = liftA2 Subtype (normalize t1) (normalize t2)
 
 -- Remove reflexive constraints and other trivial constraints
 filterTrivialConstraints :: ConstraintSet -> ConstraintSet

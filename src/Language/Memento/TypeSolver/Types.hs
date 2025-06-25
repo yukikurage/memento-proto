@@ -50,7 +50,7 @@ formatType t = case t of
   TLiteral (LNumber n) -> T.pack $ show n
   TLiteral (LBool b) -> T.pack $ show b
   TLiteral (LString s) -> "\"" <> s <> "\""
-  TVar (TypeVar name) -> name
+  TVar (TypeVar name) -> "#" <> name
   TFunction args ret ->
     "(("
       <> T.intercalate ", " (map formatType args)
@@ -63,7 +63,7 @@ formatType t = case t of
     "(" <> T.intercalate " & " (map formatType (Set.toList ts))
   TGeneric name -> name
   TApplication base args ->
-    base <> "<" <> T.intercalate ", " (map formatType args)
+    base <> "<" <> T.intercalate ", " (map formatType args) <> ">"
 
 -- Type schemes for polymorphic types (forall quantification)
 data TypeScheme = TypeScheme [T.Text] Type -- forall [a1, a2, ...] . Type
@@ -104,9 +104,32 @@ data TypeError
   = forall f a. UnboundVariable (Maybe (Metadata f a)) T.Text
   | forall f a. UnboundTypeVariable (Maybe (Metadata f a)) T.Text
   | forall f a. TypeNotSubtype (Maybe (Metadata f a)) Type Type
-  | forall f a. TypeVariableMismatch (Maybe (Metadata f a)) T.Text T.Text
+  | forall f a. TypeMismatch (Maybe (Metadata f a)) Type Type
   | SomeTypeError T.Text
   | InternalTypeError T.Text
+
+formatTypeError :: TypeError -> T.Text
+formatTypeError err = case err of
+  UnboundVariable m name ->
+    "Unbound variable: " <> name <> maybe "" (\meta -> " at " <> T.pack (show meta)) m
+  UnboundTypeVariable m name ->
+    "Unbound type variable: " <> name <> maybe "" (\meta -> " at " <> T.pack (show meta)) m
+  TypeNotSubtype m t1 t2 ->
+    "Type error: "
+      <> formatType t1
+      <> " is not a subtype of "
+      <> formatType t2
+      <> maybe "" (\meta -> " at " <> T.pack (show meta)) m
+  TypeMismatch m t1 t2 ->
+    "Type error: "
+      <> formatType t1
+      <> " does not match "
+      <> formatType t2
+      <> maybe "" (\meta -> " at " <> T.pack (show meta)) m
+  SomeTypeError msg ->
+    "Type error: " <> msg
+  InternalTypeError msg ->
+    "Internal type error: " <> msg
 
 -- Variance analysis for type parameters
 data Variance
@@ -288,7 +311,7 @@ typeVars t = case t of
   TNever -> Set.empty
   TUnknown -> Set.empty
   TLiteral _ -> Set.empty
-  TVar _ -> Set.empty
+  TVar tvar -> Set.singleton tvar
   TFunction args ret -> Set.unions (typeVars <$> args) `Set.union` typeVars ret
   TUnion ts -> Set.unions (typeVars <$> Set.toList ts)
   TIntersection ts -> Set.unions (typeVars <$> Set.toList ts)
@@ -347,3 +370,6 @@ substGenerics s t = case t of
   TGeneric name -> case Map.lookup name s of
     Just t' -> pure t'
     Nothing -> pure $ TGeneric name
+  TApplication name args -> do
+    args' <- forM args $ substGenerics s
+    pure $ TApplication name args'

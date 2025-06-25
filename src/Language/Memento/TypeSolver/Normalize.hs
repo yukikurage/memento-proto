@@ -8,11 +8,9 @@ import Language.Memento.TypeSolver.Types
 normalize ::
   forall m.
   (MonadError TypeError m) =>
-  TypeConstructorVariances ->
-  GenericBoundsMap ->
   Type ->
   m Type
-normalize tcVars genBnd t = case t of
+normalize t = case t of
   TNumber -> pure TNumber
   TBool -> pure TBool
   TString -> pure TString
@@ -21,16 +19,16 @@ normalize tcVars genBnd t = case t of
   TLiteral lit -> pure $ TLiteral lit
   TVar name -> pure $ TVar name
   TFunction args t2 -> do
-    normalizedArg <- mapM (normalize tcVars genBnd) args
-    TFunction normalizedArg <$> normalize tcVars genBnd t2
+    normalizedArg <- mapM normalize args
+    TFunction normalizedArg <$> normalize t2
   TUnion ts ->
     normalizeUnion . Set.fromList
-      =<< mapM (normalize tcVars genBnd) (Set.toList ts) -- Union has special normalization
+      =<< mapM normalize (Set.toList ts) -- Union has special normalization
   TIntersection ts ->
     normalizeIntersection . Set.fromList
-      =<< mapM (normalize tcVars genBnd) (Set.toList ts) -- Union has special normalization
+      =<< mapM normalize (Set.toList ts) -- Union has special normalization
   TGeneric name -> pure $ TGeneric name
-  TApplication name args -> TApplication name <$> mapM (normalize tcVars genBnd) args
+  TApplication name args -> TApplication name <$> mapM normalize args
 
 -- Normalize union types
 normalizeUnion ::

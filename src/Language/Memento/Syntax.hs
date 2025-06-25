@@ -23,6 +23,7 @@ import Language.Memento.Syntax.Pattern (Pattern (..))
 import Language.Memento.Syntax.Program (Program (..))
 import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable)
 import Language.Memento.Syntax.Variable (Variable (..))
+import Polysemy.Internal.Union (extract)
 
 -- Higher-order Fixed Point を使ってプログラム全体を構築する
 
@@ -80,3 +81,8 @@ extractSyntax :: AST a -> Syntax AST a
 extractSyntax ast =
   case unHFix ast of
     (metadata :*: syntax) -> syntax
+
+extractMetadata :: AST a -> Metadata AST a
+extractMetadata ast =
+  case unHFix ast of
+    (metadata :*: _) -> metadata
