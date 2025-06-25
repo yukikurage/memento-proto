@@ -18,7 +18,7 @@ data Expr [
 ];
 */
 
-val e1 : Expr<42> = mk_num_lit(42);
+val e1 : Expr<number> = mk_num_lit(42);
 val e2 : Expr<number> = mk_add(e1, mk_num_lit(2));
 val e3 : Expr<number> = mk_if(mk_bool_lit(true), mk_num_lit(1), mk_num_lit(0));
 

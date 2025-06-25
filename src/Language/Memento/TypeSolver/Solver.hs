@@ -27,25 +27,25 @@ import Safe
 
 solve :: (MonadError TypeError m) => TypeConstructorVariances -> AssumptionSet -> ConstraintSet -> m ()
 solve varMap assumptions constraints = do
-  traceM ("solve: initial assumptions = " ++ T.unpack (formatConstraintSet assumptions))
-  traceM ("solve: initial constraints = " ++ T.unpack (formatConstraintSet constraints))
+  -- traceM ("solve: initial assumptions = " ++ T.unpack (formatConstraintSet assumptions))
+  -- traceM ("solve: initial constraints = " ++ T.unpack (formatConstraintSet constraints))
   normalizedConstraints <- Set.fromList <$> mapM normalizeConstraint (Set.toList constraints)
   normalizedAssumptions <- Set.fromList <$> mapM normalizeConstraint (Set.toList assumptions)
   let
     decomposedAssumptionsFirst = decomposeAssumptionAll varMap normalizedAssumptions
     genBndMapFirst = calculateGenericBounds varMap decomposedAssumptionsFirst -- Calculate generic bounds from assumptions
-  traceM ("solve: decomposedAssumptionsFirst = " ++ T.unpack (formatConstraintSet decomposedAssumptionsFirst))
-  traceM ("solve: genBndMapFirst = " ++ show genBndMapFirst)
+    -- traceM ("solve: decomposedAssumptionsFirst = " ++ T.unpack (formatConstraintSet decomposedAssumptionsFirst))
+    -- traceM ("solve: genBndMapFirst = " ++ show genBndMapFirst)
   decomposedConstraintsFirst <- decomposeConstraintsAll varMap genBndMapFirst normalizedConstraints
-  traceM ("solve: decomposedConstraintsFirst = " ++ T.unpack (formatConstraintSet decomposedConstraintsFirst))
+  -- traceM ("solve: decomposedConstraintsFirst = " ++ T.unpack (formatConstraintSet decomposedConstraintsFirst))
   let
     (substedAssumptions, substedConstraints) = substInstancesAsPossible (decomposedAssumptionsFirst, decomposedConstraintsFirst) -- Try to substitute instances as much as possible
     decomposedAssumptionsSecond = decomposeAssumptionAll varMap substedAssumptions -- Decompose assumptions again after substitution
     genBndMapSecond = calculateGenericBounds varMap $ decomposedAssumptionsSecond -- Calculate generic bounds from assumptions
-  traceM ("solve: decomposedAssumptionsSecond = " ++ T.unpack (formatConstraintSet decomposedAssumptionsSecond))
-  traceM ("solve: genBndMapSecond = " ++ show genBndMapSecond)
+    -- traceM ("solve: decomposedAssumptionsSecond = " ++ T.unpack (formatConstraintSet decomposedAssumptionsSecond))
+    -- traceM ("solve: genBndMapSecond = " ++ show genBndMapSecond)
   decomposedConstraintsSecond <- decomposeConstraintsAll varMap genBndMapSecond substedConstraints
-  traceM ("solve: decomposedConstraintsSecond = " ++ T.unpack (formatConstraintSet decomposedConstraintsSecond))
+  -- traceM ("solve: decomposedConstraintsSecond = " ++ T.unpack (formatConstraintSet decomposedConstraintsSecond))
 
   case branchConstraints varMap decomposedAssumptionsSecond decomposedConstraintsSecond of
     Nothing -> do
@@ -247,27 +247,27 @@ calculateFullPropagation as cns =
     -- vars that are not nested
     nonNestedVars = (vars `Set.difference` nestedVars) `Set.difference` nestedVarsAs
    in
-    trace ("calculateFullPropagation: vars = " ++ show vars ++ ", nestedVars = " ++ show nestedVars ++ ", nestedVarsAs = " ++ show nestedVarsAs ++ ", nonNestedVars = " ++ show nonNestedVars) $
-      if Set.null nonNestedVars
-        then Nothing -- No non-nested variables, no propagation
-        else
-          let targetNNV = head $ Set.toList nonNestedVars -- Take one non-nested variable
-              Bounds lowers uppers = calculateBounds targetNNV cns
-              newConstraints = [Subtype lower upper | lower <- lowers, upper <- uppers]
-              oldConstraintsRemoveNonNestedVars =
-                Set.filter
-                  ( \case
-                      Subtype (TVar var1) (TVar var2) ->
-                        not $ Set.member var1 nonNestedVars || Set.member var2 nonNestedVars
-                      Subtype (TVar var) _ -> not $ Set.member var nonNestedVars
-                      Subtype _ (TVar var) -> not $ Set.member var nonNestedVars
-                      _ -> True
-                  )
-                  cns -- Remove constraints that involve non-nested vars
-           in Just $
-                Set.union
-                  oldConstraintsRemoveNonNestedVars
-                  (Set.fromList newConstraints) -- Add only truly new constraints
+    -- trace ("calculateFullPropagation: vars = " ++ show vars ++ ", nestedVars = " ++ show nestedVars ++ ", nestedVarsAs = " ++ show nestedVarsAs ++ ", nonNestedVars = " ++ show nonNestedVars) $
+    if Set.null nonNestedVars
+      then Nothing -- No non-nested variables, no propagation
+      else
+        let targetNNV = head $ Set.toList nonNestedVars -- Take one non-nested variable
+            Bounds lowers uppers = calculateBounds targetNNV cns
+            newConstraints = [Subtype lower upper | lower <- lowers, upper <- uppers]
+            oldConstraintsRemoveNonNestedVars =
+              Set.filter
+                ( \case
+                    Subtype (TVar var1) (TVar var2) ->
+                      not $ Set.member var1 nonNestedVars || Set.member var2 nonNestedVars
+                    Subtype (TVar var) _ -> not $ Set.member var nonNestedVars
+                    Subtype _ (TVar var) -> not $ Set.member var nonNestedVars
+                    _ -> True
+                )
+                cns -- Remove constraints that involve non-nested vars
+         in Just $
+              Set.union
+                oldConstraintsRemoveNonNestedVars
+                (Set.fromList newConstraints) -- Add only truly new constraints
 
 -- Recursive call of calculateFullPropagation, while there is still non-nested vars
 calculateFullPropagationAll :: AssumptionSet -> ConstraintSet -> ConstraintSet
@@ -279,25 +279,25 @@ calculateFullPropagationAll as cs =
 -- | Try to instantiate type variables as much as possible
 substInstancesAsPossible :: (AssumptionSet, ConstraintSet) -> (AssumptionSet, ConstraintSet)
 substInstancesAsPossible (as, cs) =
-  trace (T.unpack $ "substInstancesAsPossible: " <> formatConstraintSet cs <> "\n") $
-    let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
-        vars = Set.unions (Set.map constraintVars csFiltered)
-        -- boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
-        -- instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
-        -- -- Filter out self-substitutions (x <- x)
-        -- validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
-        mValidInstance =
-          headMay $
-            filter (\(var, instType) -> TVar var /= instType) $
-              mapMaybe
-                (\var -> (var,) <$> calculateInstanceFromBounds (calculateBounds var csFiltered))
-                (Set.toList vars)
-     in case mValidInstance of
-          Just (var, instanceType) ->
-            let newCs = applySubstConstraintSet var instanceType csFiltered
-                newAs = applySubstConstraintSet var instanceType as
-             in substInstancesAsPossible (newAs, newCs) -- Recur with the new constraints
-          Nothing -> (as, calculateFullPropagationAll as csFiltered)
+  -- trace (T.unpack $ "substInstancesAsPossible: " <> formatConstraintSet cs <> "\n") $
+  let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
+      vars = Set.unions (Set.map constraintVars csFiltered)
+      -- boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
+      -- instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
+      -- -- Filter out self-substitutions (x <- x)
+      -- validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
+      mValidInstance =
+        headMay $
+          filter (\(var, instType) -> TVar var /= instType) $
+            mapMaybe
+              (\var -> (var,) <$> calculateInstanceFromBounds (calculateBounds var csFiltered))
+              (Set.toList vars)
+   in case mValidInstance of
+        Just (var, instanceType) ->
+          let newCs = applySubstConstraintSet var instanceType csFiltered
+              newAs = applySubstConstraintSet var instanceType as
+           in substInstancesAsPossible (newAs, newCs) -- Recur with the new constraints
+        Nothing -> (as, calculateFullPropagationAll as csFiltered)
 
 {- | Branching BRANCH node (ref : DECOMPOSE.md)
 | with some nodes, may contain substitutions

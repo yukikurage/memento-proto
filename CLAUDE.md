@@ -64,12 +64,7 @@ stack test
 
 ### Language Syntax Evolution
 
-The language supports two syntax styles:
-
-1. **Pipeline style** (older): `42 |> x : number ->`
-2. **Modern style**: `val x : number := 42;`
-
-When working with the parser, both styles should be supported.
+The language uses a modern functional syntax with type annotations.
 
 ## Current Development Status
 
@@ -87,22 +82,50 @@ The new type solver implements the algorithm described in `docs/TYPE_SOLVER.md`:
 - **Type Normalization**: Simplifies union/intersection types using algebraic laws
 - **Subtyping**: Supports structural subtyping with contravariance for functions
 - **AST Integration**: Full integration with Memento's higher-order functor AST structure
+- **Variance Solver**: Recursive equation solver for determining variance of type parameters (`VarianceSolver.hs`)
+  - Generates variance equations from data type definitions
+  - Uses fixed-point iteration to solve recursive variance relationships
+  - Correctly handles covariant, contravariant, invariant, and bivariant positions
 
 ## Supported Language Features
 
 The constraint generator now supports:
 
-- ✅ **Value declarations**: `val x : number := 42;`
+- ✅ **Value declarations**: `val x : number = 42;`
 - ✅ **Function definitions**: `(input : number) => input * 2`
+- ✅ **Function declaration syntax**: `val add(x : number, y : number) : number = x + y;`
 - ✅ **Function application**: `doubler(21)`
 - ✅ **Lambda expressions**: `(_ : number) => expression`
 - ✅ **Binary operations**: `+`, `-`, `*`, `/`, `==`, `<`, `>`
 - ✅ **If expressions**: `if(condition) { then } else { else }`
-- ✅ **Let bindings**: `let tmp : number := 2;`
-- ✅ **Block expressions**: `{ let x := 1; x + 2 }`
+- ✅ **Let bindings**: `let tmp : number = 2;`
+- ✅ **Block expressions**: `{ let x = 1; x + 2 }`
 - ✅ **Pattern matching**: `switch (expr) [(pat : type) => result, ...]`
 - ✅ **Exhaustivity checking**: Full pattern matrix algorithm with union type support
 - ✅ **Polymorphism**: Type parameters with automatic type inference
+- ✅ **Data type declarations**: `data Option [Some<T> : (value : T) => Option<T>, None<T> : () => Option<T>];`
+- ✅ **Type aliases**: `type MyNumber = number;`
+
+### Data Type Declaration Syntax
+
+Data types are declared using square brackets containing constructor definitions:
+
+```memento
+// Single constructor
+data Box [MkBox<T> : (value : T) => Box<T>];
+
+// Multiple constructors (comma-separated)
+data Option [
+  Some<T> : (value : T) => Option<T>,
+  None<T> : () => Option<T>
+];
+
+// Constructor function syntax sugar
+data Result [
+  Ok<T, E>(value : T) : Result<T, E>,
+  Err<T, E>(error : E) : Result<T, E>
+];
+```
 
 ### Pattern Matching Features
 
@@ -119,9 +142,8 @@ The constraint generator now supports:
 - **Zero-argument constructors require parentheses**: `A()` not `A`
   - `(A : Type)` → Variable pattern (binds variable named `A`)
   - `(A() : Type)` → Constructor pattern (matches constructor `A`)
-- **Constructor namespace**: Constructor functions are prefixed internally
-  - User writes: `data SomeNum : (value : number) => SomeNum;`
-  - Internal storage: `"SomeNum"` → constructor function, `"TYPE_SomeNum"` → type name
+- **Constructor namespace**: Constructor and type names are in separate namespaces
+  - A constructor `Some` and a type `Some` can coexist without conflict
 
 ## Implementation Notes for Pattern Matching
 
@@ -162,16 +184,18 @@ The constraint generator now supports:
 - When modifying the parser, test with examples in `examples/` directory
 - JavaScript output goes to `dist/js/` directory
 - Full AST type checking enabled in Main.hs with `typeCheckAST`
-- Type solver modules: Types, Solver, Subtype, Normalize, ConstraintGen, Demo
+- Type solver modules: Types, Solver, Subtype, Normalize, ConstraintGen, VarianceSolver, Demo
 - Pattern matching examples: `exhaustivity_fail_test.mmt`, `pattern_bounds_test.mmt`
+- Variance solver uses fixed-point iteration on a finite lattice (Bivariant < Covariant, Contravariant < Invariant)
+- Type constructor information stored in `TypeConstructorInfo` with variance data
 
 ## Polymorphism Support
 
 ### Type Parameters
 
-- ✅ **Polymorphic functions**: `val identity<T> : (x : T) => T := (x : T) => x;`
-- ✅ **Polymorphic data types**: `data Some<T> : (value : T) => Option;`
-- ✅ **Multi-parameter polymorphism**: `data Pair<A, B> : (first : A, second : B) => Pair;`
+- ✅ **Polymorphic functions**: `val identity<T> : (x : T) => T = (x : T) => x;`
+- ✅ **Polymorphic data types**: `data Box [MkBox<T> : (value : T) => Box<T>];`
+- ✅ **Multi-parameter polymorphism**: `data Pair [MkPair<A, B> : (first : A, second : B) => Pair<A, B>];`
 - ✅ **Type inference**: Automatic instantiation of type variables
 - ✅ **Type schemes**: Proper quantification with `TypeScheme [vars] type`
 
@@ -186,9 +210,8 @@ The constraint generator now supports:
 
 2. **No explicit type application syntax**:
    - ❌ `identity<number>(42)` - NOT SUPPORTED
-   - ❌ `val x : Some<number> := ...` - NOT SUPPORTED
-   - ✅ `val x : number := identity(42)` - Use type inference
-   - ✅ `val x : Option := Some(42)` - Type parameters inferred
+   - ✅ `val x : Box<number> = MkBox(42)` - Type applications allowed in type annotations
+   - ✅ `val x : number = identity(42)` - Type parameters inferred in expressions
 
 ### Type Solver Integration
 
@@ -197,6 +220,7 @@ The constraint generator now supports:
 - **Constraint generation**: Works with generic types (TGeneric)
 - **Normalization**: Handles TGeneric and TApplication types
 - **Variance Analysis**: Automatic covariant/contravariant/invariant detection for type parameters
+- **Recursive Variance Solver**: Fixed-point algorithm for solving variance equations in recursive types
 
 <!-- ### Critical Type Solver Fixes (December 2024)
 
@@ -233,11 +257,45 @@ These fixes ensure the type solver follows the TYPE_SOLVER.md specification corr
 
 ```memento
 // Working polymorphic code
-val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C :=
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C =
   (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
 
-data Cons<T> : (head : T, tail : List) => List;
-data Nil<T> : () => List;
+// Data types use square brackets for constructors
+data List [
+  Cons<T> : (head : T, tail : List<T>) => List<T>,
+  Nil<T> : () => List<T>
+];
 
-val my_list : List := Cons(1, Cons(2, Nil())); // T inferred as number
+val my_list : List<number> = Cons(1, Cons(2, Nil())); // Type applications in annotations
+
+// Function syntax sugar is also supported
+val add(x : number, y : number) : number = x + y;
+val identity<T>(x : T) : T = x;
+```
+
+### Variance Analysis
+
+The type solver automatically determines variance for type parameters:
+
+```memento
+// Covariant: T appears only in positive positions
+data Box [
+  MkBox<T> : (value : T) => Box<T>
+];
+
+// Contravariant: T appears only in negative positions  
+data Consumer [
+  MkConsumer<T> : (consume : (x : T) => number) => Consumer<T>
+];
+
+// Invariant: T appears in both positive and negative positions
+data FuncBox [
+  MkFuncBox<T> : (f : (x : T) => T) => FuncBox<T>
+];
+
+// Recursive types are handled correctly
+data List [
+  Cons<T> : (head : T, tail : List<T>) => List<T>,  // List is covariant in T
+  Nil<T> : () => List<T>
+];
 ```

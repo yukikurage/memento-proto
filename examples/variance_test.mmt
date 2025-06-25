@@ -1,0 +1,37 @@
+// Test variance solving for recursive types
+
+// Simple covariant type
+data Box [
+  MkBox<T> : (value : T) => Box<T>
+];
+
+// Function container (should be invariant in T)
+data FuncBox [
+  MkFuncBox<T> : (f : (x : T) => T) => FuncBox<T>
+];
+
+// Contravariant example
+data Consumer [
+  MkConsumer<T> : (consume : (x : T) => number) => Consumer<T>
+];
+
+// Recursive list (should be covariant)
+data List [
+  Cons<T> : (head : T, tail : List<T>) => List<T>,
+  Nil<T> : () => List<T>
+];
+
+// Tree type (simplified without mutual recursion)
+data Tree [
+  Node<T> : (value : T, children : List<Tree<T>>) => Tree<T>,
+  Leaf<T> : () => Tree<T>
+];
+
+// Test values - type parameters are inferred
+val box : Box<number> = MkBox(42);
+val funcBox : FuncBox<number> = MkFuncBox((x : number) => x + 1);
+val consumer : Consumer<number> = MkConsumer((x : number) => x * 2);
+val list : List<number> = Cons(1, Cons(2, Nil()));
+val tree : Tree<number> = Node(1, Cons(Leaf(), Nil()));
+
+val main : number = 42;

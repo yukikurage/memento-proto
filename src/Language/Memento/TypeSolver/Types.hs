@@ -142,6 +142,14 @@ data Variance
 -- | Like :   Some |=> [Covariant],  or Either |=> [Covariant, Covariant],  Reader |=> [Contravariant, Covariant] ...
 type TypeConstructorVariances = Map.Map T.Text [Variance]
 
+-- | Information about a type constructor
+data TypeConstructorInfo = TypeConstructorInfo
+  { tciKind :: Int              -- ^ Number of type parameters
+  , tciVariance :: [Variance]   -- ^ Variance of each type parameter
+  , tciConstructors :: [T.Text] -- ^ Data constructors for this type
+  }
+  deriving (Show, Eq)
+
 -- ComposeVariance x y is variance y in variance x: e.g., for function type (X => Y) => Z, X is covariant because contravariant (X) in contravariant (X => Y)
 composeVariance :: Variance -> Variance -> Variance
 composeVariance x y

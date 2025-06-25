@@ -10,7 +10,7 @@ module Language.Memento.TypeSolver.ConstraintGen (
   typeCheckAST,
 ) where
 
-import Control.Monad (foldM, forM, unless, when, zipWithM, zipWithM_)
+import Control.Monad (foldM, forM, forM_, unless, when, zipWithM, zipWithM_)
 import Control.Monad.State
 import Data.List (intercalate)
 import qualified Data.Map.Strict as Map
@@ -34,11 +34,14 @@ import qualified Language.Memento.Syntax.MType as SMType
 import Language.Memento.Syntax.Metadata (Metadata (..))
 import qualified Language.Memento.Syntax.Pattern as SPattern
 import qualified Language.Memento.Syntax.Program as SProgram
-import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable, KTypeVariable)
+import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KTypeVariable, KVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
 import Language.Memento.TypeSolver.Assumption (calculateGenericBounds)
 import Language.Memento.TypeSolver.Solver (solve)
 import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.DataTypeAnalysis (analyzeDataTypes, DataTypeAnalysis (..), DataTypeInfo (..), ConstructorInfo (..))
+import Language.Memento.TypeSolver.VarianceAnalysis (analyzeVariances, vaVariances)
+import Language.Memento.TypeSolver.VarianceSolver (generateVarianceEquations, solveVarianceSystem)
 
 {-
 NOTE: TypeVar from Solver is pure "internal" type variable.
@@ -49,26 +52,16 @@ SVariable.Var is the "external" variable that is used in the source code. (has b
 -- Core Types
 -- ============================================================================
 
-type VarianceMap = [Variance]
-
 data InferContext = InferContext
   { icVarCounter :: Int
   , icConstraints :: ConstraintSet
   , icTypeEnv :: Map.Map T.Text TypeScheme -- Maps variable names to their type schemes
   , icTypeConstructors :: Map.Map T.Text TypeConstructorInfo
-  , icTemporaryTypeConstructors :: Set.Set T.Text -- For data definition
   , icConstructors :: Set.Set T.Text
   , icGenericTypes :: Map.Map T.Text T.Text
   , icAssumptions :: AssumptionSet -- Type variable substitutions
   }
   deriving (Show)
-
-data TypeConstructorInfo = TypeConstructorInfo
-  { tciKind :: Int
-  , tciVariance :: VarianceMap
-  , tciConstructors :: [T.Text]
-  }
-  deriving (Show, Eq)
 
 type InferM = StateT InferContext (Except TypeError)
 
@@ -84,20 +77,27 @@ typeCheckAST ast =
           , icConstraints = Set.empty
           , icTypeEnv = Map.empty
           , icTypeConstructors = Map.empty
-          , icTemporaryTypeConstructors = Set.empty
           , icConstructors = Set.empty
           , icGenericTypes = Map.empty
           , icAssumptions = Set.empty
           }
    in runExcept (evalStateT (inferProgram ast) initialCtx)
 
--- | Two-phase type checking: collect types first, then check bodies
+-- | Three-phase type checking: extract data types, collect definitions, then check bodies
 inferProgram :: AST KProgram -> InferM (Map.Map T.Text TypeScheme)
 inferProgram ast = do
   case unProgram (extractSyntax ast) of
     SProgram.Program declAsts -> do
+      -- Phase 0: Extract data type information (pure analysis)
+      let dataTypeAnalysis = analyzeDataTypes ast
+      preregisterDataTypes dataTypeAnalysis
+
       -- Phase 1: Collect all definition types and data constructors
       mapM_ collectDefinitionType declAsts
+
+      -- Phase 1.5: Solve variance equations for all data types
+      solveAllVariancesNew ast
+
       -- Phase 2: Check each definition body individually
       mapM_ (withIsolatedEnv . checkSingleDefinition) declAsts
       gets icTypeEnv
@@ -185,6 +185,75 @@ saveAssumptions = gets icAssumptions
 restoreAssumptions :: AssumptionSet -> InferM ()
 restoreAssumptions assumptions = modify $ \ctx -> ctx{icAssumptions = assumptions}
 
+-- | Pre-register data types to avoid forward reference issues
+preregisterDataTypes :: DataTypeAnalysis -> InferM ()
+preregisterDataTypes analysis = do
+  -- Add placeholder type constructor info for all data types
+  forM_ (Map.elems $ dtaDataTypes analysis) $ \dt -> do
+    let placeholderInfo = TypeConstructorInfo
+          { tciKind = dtiKind dt
+          , tciVariance = replicate (dtiKind dt) Bivariant  -- Will be updated later
+          , tciConstructors = map ciName (dtiConstructors dt)
+          }
+    modify $ \ctx -> ctx { icTypeConstructors = Map.insert (dtiName dt) placeholderInfo (icTypeConstructors ctx) }
+
+-- | Solve variance equations using the new analysis system
+solveAllVariancesNew :: AST KProgram -> InferM ()
+solveAllVariancesNew ast = do
+  -- Use the new pure data type analysis
+  let dataTypeAnalysis = analyzeDataTypes ast
+      varianceAnalysis = analyzeVariances dataTypeAnalysis
+      solvedVariances = vaVariances varianceAnalysis
+
+  -- Debug output
+  traceM $ "New variance analysis results: " <> show (Map.toList solvedVariances)
+
+  -- Update type constructor info with solved variances
+  typeCtors <- gets icTypeConstructors
+  forM_ (Map.toList typeCtors) $ \(typeName, info) -> do
+    case Map.lookup typeName solvedVariances of
+      Just variances -> do
+        let updatedInfo = info{tciVariance = variances}
+        modify $ \ctx -> ctx{icTypeConstructors = Map.insert typeName updatedInfo (icTypeConstructors ctx)}
+      Nothing -> 
+        traceM $ "Warning: No variance information found for type " <> T.unpack typeName
+
+-- | Old variance solver (kept for comparison)
+solveAllVariances :: InferM ()
+solveAllVariances = do
+  -- traceM "Starting variance solving phase..."
+  typeCtors <- gets icTypeConstructors
+  typeEnv <- gets icTypeEnv
+
+  -- Generate variance equations from all type constructors
+  let equations = generateVarianceEquations typeCtors typeEnv
+
+  -- Debug output
+  -- traceM $ "Generated variance equations: " <> show (Map.toList equations)
+
+  -- Solve the variance system
+  let solution = solveVarianceSystem equations
+
+  -- Debug output
+  -- traceM $ "Solved variances: " <> show (Map.toList solution)
+
+  -- Update type constructor info with solved variances
+  forM_ (Map.toList typeCtors) $ \(typeName, info) -> do
+    -- Extract type parameters for this type
+    let typeParams = getTypeParams typeName info
+    -- Get solved variances for each parameter
+    let solvedVariances = map (\param -> Map.findWithDefault Bivariant (typeName <> "_" <> param) solution) typeParams
+    -- Update the type constructor info
+    let updatedInfo = info{tciVariance = solvedVariances}
+    modify $ \ctx -> ctx{icTypeConstructors = Map.insert typeName updatedInfo (icTypeConstructors ctx)}
+ where
+  -- Extract type parameter names from a type constructor
+  getTypeParams :: T.Text -> TypeConstructorInfo -> [T.Text]
+  getTypeParams _ (TypeConstructorInfo arity _ _) =
+    -- For now, assume parameters are named T1, T2, etc.
+    -- This should match the naming convention used in VarianceSolver
+    map (\i -> "T" <> T.pack (show i)) [1 .. arity]
+
 -- ============================================================================
 -- Type Conversion and Instantiation
 -- ============================================================================
@@ -211,19 +280,18 @@ convertMType ast = do
           ctx <- get
           case Map.lookup name (icTypeConstructors ctx) of
             Just (TypeConstructorInfo k _ _) | k == 0 -> return $ TApplication name []
-            _ ->
-              if Set.member name (icTemporaryTypeConstructors ctx)
-                then
-                  return $ TApplication name [] -- Temporary type constructor, treat as application with no args
-                else do
-                  -- Check if the name is a generic type
-                  case Map.lookup name (icGenericTypes ctx) of
-                    Just g -> do
-                      -- If the name is in generic types, treat it as a generic type
-                      return $ TGeneric g
-                    Nothing -> do
-                      -- Var is not a generic type nor type constructor, then throw an error
-                      throwError $ UnboundTypeVariable (Just meta) name
+            Just _ -> 
+              -- Type constructor exists, should be applied with type arguments
+              throwError $ UnboundTypeVariable (Just meta) name  -- Missing type arguments
+            Nothing -> do
+              -- Check if the name is a generic type
+              case Map.lookup name (icGenericTypes ctx) of
+                Just g -> do
+                  -- If the name is in generic types, treat it as a generic type
+                  return $ TGeneric g
+                Nothing -> do
+                  -- Var is not a generic type nor type constructor, then throw an error
+                  throwError $ UnboundTypeVariable (Just meta) name
     SMType.TLiteral litAst ->
       return $ convertLiteral litAst
     SMType.TFunction params retType -> do
@@ -247,7 +315,6 @@ convertMType ast = do
             throwError $
               SomeTypeError $
                 "Type constructor " <> baseName <> " expects " <> T.pack (show k) <> " arguments, got " <> T.pack (show (length argAsts))
-        Nothing | Set.member baseName (icTemporaryTypeConstructors ctx) -> pure ()
         Nothing -> throwError $ UnboundTypeVariable (Just meta) baseName
 
       argTypes <- mapM convertMType argAsts
@@ -293,31 +360,11 @@ collectDefinitionType ast =
       let SVariable.Var name = unVariable (extractSyntax varAst)
       collectPolymorphicValType name typeParams typeAst
     SDefinition.DataDef dataNameAst constructorDefs -> do
-      -- Data definitions work the same in both phases
+      -- Data definitions: register constructor functions
       let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
-      -- Add data type to the temporary context
-      modify $ \ctx -> ctx{icTemporaryTypeConstructors = Set.insert dataName (icTemporaryTypeConstructors ctx)}
-
-      tcInfos <- mapM (inferConstructorDef dataName) constructorDefs
-      unless (null tcInfos) $ do
-        -- Combine all constructor infos for this data type
-        combinedInfo <-
-          foldM
-            ( \acc info -> case appendTypeConstructorInfo acc info of
-                Just newInfo -> return newInfo
-                Nothing -> throwError $ SomeTypeError $ "Cannot combine type constructor infos: " <> T.pack (show acc) <> " and " <> T.pack (show info)
-            )
-            (head tcInfos)
-            (tail tcInfos)
-        modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
-
-      traceM $ "Collected type constructor info for " <> T.unpack dataName <> ": " <> show tcInfos
-
-      -- Remove temporary context
-      modify $ \ctx ->
-        ctx
-          { icTemporaryTypeConstructors = Set.empty
-          }
+      
+      -- Process each constructor and add to type environment
+      mapM_ (inferConstructorDefSimplified dataName) constructorDefs
     SDefinition.TypeDef aliasAst _params typeAst -> do
       -- Type definitions work the same
       let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
@@ -405,79 +452,37 @@ checkSingleDefinition ast =
     modify $ \ctx -> ctx{icGenericTypes = savedGenericTypes}
 
 -- ============================================================================
--- Legacy Declaration Inference (Unused)
--- ============================================================================
-
-inferDecl :: AST KDefinition -> InferM ()
-inferDecl ast =
-  case unDefinition (extractSyntax ast) of
-    SDefinition.ValDef varAst typeParams typeAst exprAst -> do
-      let SVariable.Var name = unVariable (extractSyntax varAst)
-      inferPolymorphicVal name typeParams typeAst exprAst
-    SDefinition.DataDef dataNameAst constructorDefs -> do
-      let SVariable.Var dataName = unVariable (extractSyntax dataNameAst)
-
-      -- Add data type to the temporary context
-      modify $ \ctx -> ctx{icTemporaryTypeConstructors = Set.insert dataName (icTemporaryTypeConstructors ctx)}
-
-      tcInfos <- mapM (inferConstructorDef dataName) constructorDefs
-      unless (null tcInfos) $ do
-        -- Combine all constructor infos for this data type
-        combinedInfo <-
-          foldM
-            ( \acc info -> case appendTypeConstructorInfo acc info of
-                Just newInfo -> return newInfo
-                Nothing -> throwError $ SomeTypeError $ "Cannot combine type constructor infos: " <> T.pack (show acc) <> " and " <> T.pack (show info)
-            )
-            (head tcInfos)
-            (tail tcInfos)
-        modify $ \ctx -> ctx{icTypeConstructors = Map.insert dataName combinedInfo (icTypeConstructors ctx)}
-
-      traceM $ show tcInfos
-
-      -- Remove temporary context
-      modify $ \ctx ->
-        ctx
-          { icTemporaryTypeConstructors = Set.empty
-          }
-    SDefinition.TypeDef aliasAst _params typeAst -> do
-      let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
-      aliasType <- convertMType typeAst
-      addVar aliasName aliasType
- where
-  inferPolymorphicVal name typeParams typeAst exprAst = do
-    let paramNames =
-          [ case unTypeVariable (extractSyntax paramAst) of
-            SVariable.TypeVar paramName -> paramName
-          | paramAst <- typeParams
-          ]
-
-    savedEnv <- gets icTypeEnv
-    savedGenericTypes <- gets icGenericTypes
-
-    -- id<T> : T => T  // <T> adds generic type to the context
-    freshGenerics <-
-      mapM
-        ( \paramName -> do
-            g <- freshGenericsWithPrefix paramName
-            addGenericType paramName g
-            return g
-        )
-        paramNames
-
-    declaredType <- convertMType typeAst
-    inferredType <- inferExpr exprAst
-    addConstraint $ Subtype inferredType declaredType
-
-    -- Revert type envs
-    modify $ \ctx -> ctx{icTypeEnv = savedEnv, icGenericTypes = savedGenericTypes}
-
-    let typeScheme = TypeScheme freshGenerics declaredType
-    addVarScheme name typeScheme
-
--- ============================================================================
 -- Constructor Definition Inference
 -- ============================================================================
+
+-- | Simplified constructor definition that only adds to type environment
+inferConstructorDefSimplified :: T.Text -> SDefinition.ConstructorDef AST -> InferM ()
+inferConstructorDefSimplified dataName (SDefinition.ConstructorDef ctorNameAst typeParams fullTypeAst) = do
+  let SVariable.Var ctorName = unVariable (extractSyntax ctorNameAst)
+      constructorTypeParamNames =
+        [ case unTypeVariable (extractSyntax paramAst) of
+          SVariable.TypeVar paramName -> paramName
+        | paramAst <- typeParams
+        ]
+
+  -- Save and add generic types to context
+  savedGenericTypes <- gets icGenericTypes
+  freshGenerics <-
+    mapM
+      ( \paramName -> do
+          g <- freshGenericsWithPrefix paramName
+          addGenericType paramName g
+          return g
+      )
+      constructorTypeParamNames
+
+  -- Convert constructor type and add to environment
+  fullType <- convertMType fullTypeAst
+  let typeScheme = TypeScheme freshGenerics fullType
+  addVarScheme ctorName typeScheme
+
+  -- Restore generic context
+  modify $ \ctx -> ctx { icGenericTypes = savedGenericTypes }
 
 inferConstructorDef :: T.Text -> SDefinition.ConstructorDef AST -> InferM TypeConstructorInfo
 inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams fullTypeAst) = do
@@ -523,15 +528,11 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
       case retType of
         TApplication dn typeParams | dn == dataName -> do
           let tciKind = length typeParams
-          varMap <- getTypeConstructorVariances
-          tciVariance <- forM typeParams $ \typeParam -> case typeParam of
-            TGeneric varName -> do
-              analyzedVariances <- forM argTypes $ analyzeVariance varMap varName
-              pure $ sumVariance analyzedVariances
-            _ -> pure Invariant
+          -- Use placeholder variances (Bivariant) - will be solved later
+          let tciVariance = replicate tciKind Bivariant
           let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme
-          traceM $ "Analyzed variances for " <> T.unpack dn <> ": " <> show tciVariance
+          -- traceM $ "Using placeholder variances for " <> T.unpack dn <> ": " <> show tciVariance
           return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
         TVar (TypeVar dn) | dn == dataName -> do
           -- Zero-argument type constructor case
