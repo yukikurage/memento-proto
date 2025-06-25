@@ -249,6 +249,10 @@ analyzeVariance varsMap paramName typeExpr = case typeExpr of
 data Constraint = Subtype Type Type
   deriving (Eq, Ord, Show)
 
+-- Type bounds for constraint solving
+data Bounds = Bounds [Type] [Type]  -- Lower bounds, Upper bounds
+  deriving (Eq, Ord, Show)
+
 -- Format type errors
 formatConstraintSet :: ConstraintSet -> T.Text
 formatConstraintSet constraints =

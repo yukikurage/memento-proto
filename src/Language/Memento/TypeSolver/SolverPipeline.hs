@@ -28,8 +28,10 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (traceM)
 import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decomposeAssumptionAll)
+import Language.Memento.TypeSolver.Contradiction (checkContradictions)
 import Language.Memento.TypeSolver.Normalize (normalizeConstraint)
-import Language.Memento.TypeSolver.Solver (branchConstraints, calculatePropagationAll, checkContradictions, decomposeConstraintsAll, substInstancesAsPossible)
+import Language.Memento.TypeSolver.Propagation (calculatePropagationAll)
+import Language.Memento.TypeSolver.SolverUtils (branchConstraints, decomposeConstraintsAll, substInstancesAsPossible)
 import Language.Memento.TypeSolver.Types
 
 -- ============================================================================

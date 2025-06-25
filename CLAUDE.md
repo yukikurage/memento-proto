@@ -118,9 +118,12 @@ The type solver has been completely refactored into a modular, composable archit
 ### Core Solver Components
 
 - **SolverPipeline.hs**: Modular multi-step algorithm with composable stages for decomposition, contradiction checking, and branch splitting
+- **SolverUtils.hs**: Core constraint manipulation algorithms (decomposition, branching, substitution)
+- **Contradiction.hs**: Contradiction checking for unsatisfiable constraints
+- **Propagation.hs**: Constraint propagation and type variable bounds calculation
+- **Normalize.hs**: Type and constraint normalization using algebraic laws
 - **Types.hs**: Core type definitions and utilities
 - **Subtype.hs**: Structural subtyping with contravariance for functions
-- **Normalize.hs**: Type normalization using algebraic laws
 - **Assumption.hs**: Generic bounds calculation and decomposition
 
 ### Architecture Benefits
@@ -131,7 +134,8 @@ The type solver has been completely refactored into a modular, composable archit
 - **Maintainability**: Clear separation of concerns and reduced coupling
 - **Testability**: Each stage can be unit tested in isolation
 - **Simplified Interface**: Clean, direct API with single entry point (`inferTypes`)
-- **No Legacy Code**: All version-indicating names and backward compatibility code removed
+- **No Legacy Code**: All legacy functions and version-indicating names completely removed
+- **Proper Module Organization**: Each module has single responsibility (contradiction checking, propagation, etc.)
 
 ### Parallel Processing (Future Enhancement)
 

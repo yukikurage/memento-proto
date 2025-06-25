@@ -75,10 +75,12 @@ library
     Language.Memento.TypeSolver
     Language.Memento.TypeSolver.Assumption
     Language.Memento.TypeSolver.ConstraintGenerator
+    Language.Memento.TypeSolver.Contradiction
     Language.Memento.TypeSolver.DataTypeAnalysis
     Language.Memento.TypeSolver.Normalize
-    Language.Memento.TypeSolver.Solver
+    Language.Memento.TypeSolver.Propagation
     Language.Memento.TypeSolver.SolverPipeline
+    Language.Memento.TypeSolver.SolverUtils
     Language.Memento.TypeSolver.Subtype
     Language.Memento.TypeSolver.TypeEnvironment
     Language.Memento.TypeSolver.TypeInference

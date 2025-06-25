@@ -4,7 +4,9 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Language.Memento.TypeSolver.Solver where
+-- | Core solver utility functions for the Memento type solver
+-- Contains constraint manipulation and decomposition algorithms
+module Language.Memento.TypeSolver.SolverUtils where
 
 {-
 Based on the docs/TYPE_SOLVER.md
@@ -20,56 +22,10 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace, traceM)
 import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decomposeAssumptionAll)
-import Language.Memento.TypeSolver.Normalize (normalize, normalizeConstraint)
 import Language.Memento.TypeSolver.Subtype
 import Language.Memento.TypeSolver.Types
 import Safe
 
-solve :: (MonadError TypeError m) => TypeConstructorVariances -> AssumptionSet -> ConstraintSet -> m ()
-solve varMap assumptions constraints = do
-  -- traceM ("solve: initial assumptions = " ++ T.unpack (formatConstraintSet assumptions))
-  -- traceM ("solve: initial constraints = " ++ T.unpack (formatConstraintSet constraints))
-  normalizedConstraints <- Set.fromList <$> mapM normalizeConstraint (Set.toList constraints)
-  normalizedAssumptions <- Set.fromList <$> mapM normalizeConstraint (Set.toList assumptions)
-  let
-    decomposedAssumptionsFirst = decomposeAssumptionAll varMap normalizedAssumptions
-    genBndMapFirst = calculateGenericBounds varMap decomposedAssumptionsFirst -- Calculate generic bounds from assumptions
-    -- traceM ("solve: decomposedAssumptionsFirst = " ++ T.unpack (formatConstraintSet decomposedAssumptionsFirst))
-    -- traceM ("solve: genBndMapFirst = " ++ show genBndMapFirst)
-  decomposedConstraintsFirst <- decomposeConstraintsAll varMap genBndMapFirst normalizedConstraints
-  -- traceM ("solve: decomposedConstraintsFirst = " ++ T.unpack (formatConstraintSet decomposedConstraintsFirst))
-  let
-    (substedAssumptions, substedConstraints) = substInstancesAsPossible (decomposedAssumptionsFirst, decomposedConstraintsFirst) -- Try to substitute instances as much as possible
-    decomposedAssumptionsSecond = decomposeAssumptionAll varMap substedAssumptions -- Decompose assumptions again after substitution
-    genBndMapSecond = calculateGenericBounds varMap $ decomposedAssumptionsSecond -- Calculate generic bounds from assumptions
-    -- traceM ("solve: decomposedAssumptionsSecond = " ++ T.unpack (formatConstraintSet decomposedAssumptionsSecond))
-    -- traceM ("solve: genBndMapSecond = " ++ show genBndMapSecond)
-  decomposedConstraintsSecond <- decomposeConstraintsAll varMap genBndMapSecond substedConstraints
-  -- traceM ("solve: decomposedConstraintsSecond = " ++ T.unpack (formatConstraintSet decomposedConstraintsSecond))
-
-  case branchConstraints varMap decomposedAssumptionsSecond decomposedConstraintsSecond of
-    Nothing -> do
-      -- Then, we can assume there are only BOUND constraints (ref: DECOMPOSE.md)
-      checkContradictions varMap genBndMapSecond $ calculatePropagationAll decomposedConstraintsSecond
-    Just branches -> do
-      branchResults <- untilSuccess branches $ uncurry (solve varMap)
-      case branchResults of
-        Right _ -> return () -- At least one branch succeeded
-        Left errors -> throwError $ head errors -- All branches failed, return the first error
-
--- | Run a function until it succeeds or all inputs are exhausted
-untilSuccess :: (MonadError e m) => [a] -> (a -> m b) -> m (Either [e] b)
-untilSuccess xs f = case xs of
-  [] -> pure $ Left []
-  (x : xs') -> do
-    result <- (Right <$> f x) `catchError` \e -> pure $ Left e
-    case result of
-      Right v -> pure $ Right v -- Success, return the value
-      Left e -> do
-        restResult <- untilSuccess xs' f -- Try the rest of the inputs
-        case restResult of
-          Right v -> pure $ Right v -- Found a success in the rest
-          Left es -> pure $ Left (e : es) -- Collect errors
 
 {- | Repeat decomposition while there are still constraints to decompose
 | All remaining may be "BRANCH" or "BOUND" pair (ref: DECOMPOSE.md)
@@ -150,7 +106,6 @@ decomposeConstraint varMap bounds cns =
             )
     Subtype t1 t2 -> throwError $ TypeNotSubtype Nothing t1 t2
 
-data Bounds = Bounds [Type] [Type]
 
 calculateBounds :: TypeVar -> ConstraintSet -> Bounds
 calculateBounds var cs =
