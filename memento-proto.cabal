@@ -71,7 +71,6 @@ library
     Language.Memento.Syntax.Pattern
     Language.Memento.Syntax.Program
     Language.Memento.Syntax.Tag
-    Language.Memento.Syntax.TypeInfo
     Language.Memento.Syntax.Variable
     Language.Memento.TypeSolver
     Language.Memento.TypeSolver.Assumption
@@ -83,8 +82,10 @@ library
     Language.Memento.TypeSolver.SolverPipeline
     Language.Memento.TypeSolver.SolverUtils
     Language.Memento.TypeSolver.Subtype
+    Language.Memento.TypeSolver.TypedASTBuilder
     Language.Memento.TypeSolver.TypeEnvironment
     Language.Memento.TypeSolver.TypeInference
+    Language.Memento.TypeSolver.TypeInfo
     Language.Memento.TypeSolver.Types
     Language.Memento.TypeSolver.VarianceAnalysis
   other-modules:

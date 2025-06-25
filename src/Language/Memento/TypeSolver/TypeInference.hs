@@ -5,6 +5,7 @@ Orchestrates the complete type inference pipeline using modular components
 -}
 module Language.Memento.TypeSolver.TypeInference (
   inferTypes,
+  inferTypesWithAST,
 ) where
 
 import Control.Monad (foldM)
@@ -29,6 +30,7 @@ import qualified Language.Memento.Syntax.Variable as SVariable
 import Language.Memento.TypeSolver.ConstraintGenerator
 import Language.Memento.TypeSolver.DataTypeAnalysis
 import Language.Memento.TypeSolver.TypeEnvironment (TypeEnvironment (..), emptyTypeEnv, extendEnv, extendEnvScheme)
+import Language.Memento.TypeSolver.TypedASTBuilder (TypedASTInfo, buildTypedASTInfo)
 import Language.Memento.TypeSolver.VarianceAnalysis
 
 -- Core solver components
@@ -55,6 +57,13 @@ inferTypes ast = do
 
   -- Phase 3: Generate and solve constraints for each definition
   checkProgramBodies ast programTypeEnv (vaVariances varianceAnalysis)
+
+-- | Type inference that also returns typed AST information
+inferTypesWithAST :: AST KProgram -> Either TypeError (Map.Map T.Text TypeScheme, TypedASTInfo)
+inferTypesWithAST ast = do
+  typeEnv <- inferTypes ast
+  let typedASTInfo = buildTypedASTInfo typeEnv
+  return (typeEnv, typedASTInfo)
 
 -- ============================================================================
 -- Implementation Functions

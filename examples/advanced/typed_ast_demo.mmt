@@ -1,0 +1,7 @@
+// Demo of typed AST functionality
+val add(x : number, y : number) : number = x + y;
+val result : number = add(5, 3);
+
+data Option [Some<T> : (value : T) => Option<T>, None<T> : () => Option<T>];
+val some_number : Option<number> = Some(42);
+val none_value : Option<string> = None();
