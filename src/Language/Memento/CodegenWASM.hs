@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Language.Memento.CodegenWASM 
   ( generateWASM
+  , generateWASMFromTypedAST
   , WASMModule(..)
   , WASMFunction(..)
   , WASMType(..)
@@ -17,11 +18,26 @@ import qualified Language.Memento.CodegenWASM.Functions as Func
 import Language.Memento.CodegenWASM.Expressions
 import Language.Memento.CodegenWASM.Control
 import qualified Language.Memento.CodegenWASM.Data as Data
+import Language.Memento.TypedASTExtractor
+import Language.Memento.TypeSolver.TypeInfo (TypedAST)
+import Language.Memento.Syntax.Tag (KProgram)
+import Language.Memento.Syntax (AST)
 
 -- Main entry point for WASM generation
 generateWASM :: IR.IRProgram -> Text
 generateWASM irProgram = 
   let wasmModule = compileProgram irProgram
+  in generateWAT wasmModule
+
+-- Enhanced entry point for WASM generation from TypedAST and AST
+generateWASMFromTypedAST :: AST KProgram -> TypedAST KProgram -> Text
+generateWASMFromTypedAST astProgram typedAST =
+  let -- Extract type information from TypedAST
+      typedInfo = extractTypedASTInfo typedAST
+      -- Use enhanced IR generation with type information
+      irProgram = enhancedLowerToIR astProgram typedInfo
+      -- Generate WASM using existing pipeline
+      wasmModule = compileProgram irProgram
   in generateWAT wasmModule
 
 -- Compile entire IR program to WASM module

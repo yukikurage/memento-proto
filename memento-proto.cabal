@@ -72,6 +72,7 @@ library
     Language.Memento.Syntax.Program
     Language.Memento.Syntax.Tag
     Language.Memento.Syntax.Variable
+    Language.Memento.TypedASTExtractor
     Language.Memento.TypeSolver
     Language.Memento.TypeSolver.Assumption
     Language.Memento.TypeSolver.ConstraintGenerator

@@ -23,7 +23,6 @@ import Language.Memento.Syntax.Metadata (Metadata (..))
 import Language.Memento.Syntax.Pattern (Pattern (..))
 import Language.Memento.Syntax.Program (Program (..))
 import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KTypeVariable, KVariable)
-import Language.Memento.Syntax.TypeInfo (TypeInfo)
 import Language.Memento.Syntax.Variable (TypeVariable (..), Variable (..))
 import Polysemy.Internal.Union (extract)
 

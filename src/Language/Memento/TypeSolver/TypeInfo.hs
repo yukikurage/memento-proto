@@ -5,6 +5,7 @@
 
 module Language.Memento.TypeSolver.TypeInfo where
 
+import Data.Function ((&))
 import Data.Kind (Type)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)

@@ -1,63 +1,143 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
 
--- | Build typed AST from constraint solving results
--- This module provides a practical interface for attaching type information to AST nodes
+-- | Compositional TypedAST construction
 module Language.Memento.TypeSolver.TypedASTBuilder 
-  ( TypedASTInfo (..),
-    buildTypedASTInfo,
+  ( -- * TypedAST construction functions
+    buildTypedExpr,
+    buildTypedVar,
+    buildTypedLiteral,
+    buildTypedType,
+    buildTypedPattern,
+    buildTypedLet,
+    buildTypedDefinition,
+    buildTypedProgram,
+    
+    -- * Helper functions  
+    extractInferredType,
     extractVariableType,
-    extractExpressionType,
-    formatTypedASTInfo,
+    extractTypeScheme,
+    getExpressionType,
+    getVariableInfo,
   ) 
 where
 
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
+import Language.Memento.Data.HCoproduct ((:+:)(HInjL, HInjR), Injective(hInject))
+import Language.Memento.Data.HFix (HFix (HFix))
+import Language.Memento.Data.HProduct (HUnit(..), (:*:)((:*:)))
 import Language.Memento.Syntax
-import Language.Memento.Syntax.Tag (KExpr, KVariable)
+import Language.Memento.Syntax.Metadata (Metadata(..))
+import Language.Memento.Syntax.Tag (KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable)
+import Language.Memento.TypeSolver.TypeInfo
 import qualified Language.Memento.TypeSolver.Types as TSTypes
+import Text.Megaparsec (SourcePos)
 
 -- ============================================================================
--- Simplified TypedAST Information
+-- TypedAST Construction Functions
 -- ============================================================================
 
--- | Simplified typed AST information that can be easily used by downstream consumers
-data TypedASTInfo = TypedASTInfo
-  { taiVariableTypes :: Map.Map T.Text TSTypes.TypeScheme,  -- ^ Variable name to type scheme
-    taiExpressionTypes :: Map.Map Int TSTypes.Type,         -- ^ Expression ID to inferred type (placeholder)
-    taiLiteralTypes :: Map.Map Int TSTypes.Type,            -- ^ Literal ID to inferred type (placeholder)
-    taiTypeResolutions :: Map.Map Int TSTypes.Type          -- ^ Type node ID to resolved type (placeholder)
-  }
-  deriving (Show, Eq)
+-- | Build a typed expression from raw components
+buildTypedExpr :: Metadata TypedAST KExpr -> Syntax TypedAST KExpr -> TSTypes.Type -> Map.Map T.Text TSTypes.Type -> TypedAST KExpr
+buildTypedExpr metadata syntax inferredType localBindings =
+  let unit = HUnit
+      typeInfo = hInject (ExprTypeInfo inferredType localBindings)
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
 
--- | Build typed AST info from type checking results
-buildTypedASTInfo :: Map.Map T.Text TSTypes.TypeScheme -> TypedASTInfo
-buildTypedASTInfo typeEnv = TypedASTInfo
-  { taiVariableTypes = typeEnv
-  , taiExpressionTypes = Map.empty  -- Would be populated during constraint generation
-  , taiLiteralTypes = Map.empty     -- Would be populated during constraint generation
-  , taiTypeResolutions = Map.empty  -- Would be populated during type resolution
-  }
+-- | Build a typed variable from raw components
+buildTypedVar :: Metadata TypedAST KVariable -> Syntax TypedAST KVariable -> TSTypes.Type -> Maybe TSTypes.TypeScheme -> TypedAST KVariable
+buildTypedVar metadata syntax inferredType typeScheme =
+  let unit = HUnit
+      typeInfo = hInject (VariableTypeInfo inferredType typeScheme)
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed literal from raw components
+buildTypedLiteral :: Metadata TypedAST KLiteral -> Syntax TypedAST KLiteral -> TSTypes.Type -> TypedAST KLiteral
+buildTypedLiteral metadata syntax inferredType =
+  let unit = HUnit
+      typeInfo = hInject (LiteralTypeInfo inferredType)
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed type node from raw components
+buildTypedType :: Metadata TypedAST KType -> Syntax TypedAST KType -> Maybe TSTypes.Type -> TypedAST KType
+buildTypedType metadata syntax resolvedType =
+  let unit = HUnit
+      typeInfo = hInject (MTypeTypeInfo resolvedType)
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed pattern from raw components (uses HVoid for no type info)
+buildTypedPattern :: forall a. Metadata TypedAST a -> Syntax TypedAST a -> TypedAST a
+buildTypedPattern metadata syntax =
+  let unit = HUnit
+      typeInfo = HInjL (HInjL (HInjL (HInjL undefined)))  -- HVoid in the coproduct chain
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed let from raw components (uses HVoid for no type info)
+buildTypedLet :: forall a. Metadata TypedAST a -> Syntax TypedAST a -> TypedAST a
+buildTypedLet metadata syntax =
+  let unit = HUnit
+      typeInfo = HInjL (HInjL (HInjL (HInjL undefined)))  -- HVoid in the coproduct chain
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed definition from raw components (uses HVoid for no type info)
+buildTypedDefinition :: forall a. Metadata TypedAST a -> Syntax TypedAST a -> TypedAST a
+buildTypedDefinition metadata syntax =
+  let unit = HUnit
+      typeInfo = HInjL (HInjL (HInjL (HInjL undefined)))  -- HVoid in the coproduct chain
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
+
+-- | Build a typed program from raw components (uses HVoid for no type info)
+buildTypedProgram :: forall a. Metadata TypedAST a -> Syntax TypedAST a -> TypedAST a
+buildTypedProgram metadata syntax =
+  let unit = HUnit
+      typeInfo = HInjL (HInjL (HInjL (HInjL undefined)))  -- HVoid in the coproduct chain
+  in HFix (unit :*: metadata :*: syntax :*: typeInfo)
 
 -- ============================================================================
--- Helper Functions for Type Extraction
+-- Convenience Functions for Creating Metadata and Syntax
 -- ============================================================================
 
--- | Extract variable type from typed AST info
-extractVariableType :: T.Text -> TypedASTInfo -> Maybe TSTypes.TypeScheme
-extractVariableType varName typedInfo = Map.lookup varName (taiVariableTypes typedInfo)
+-- | Create metadata from source positions
+createMetadata :: SourcePos -> SourcePos -> Metadata TypedAST a
+createMetadata startPos endPos = Metadata startPos endPos
 
--- | Extract expression type from typed AST info (placeholder)
-extractExpressionType :: Int -> TypedASTInfo -> Maybe TSTypes.Type
-extractExpressionType exprId typedInfo = Map.lookup exprId (taiExpressionTypes typedInfo)
+-- ============================================================================
+-- Type Extraction Functions
+-- ============================================================================
 
--- | Format typed AST info for display
-formatTypedASTInfo :: TypedASTInfo -> T.Text
-formatTypedASTInfo typedInfo = T.unlines
-  [ "=== Typed AST Information ==="
-  , "Variable Types:"
-  , TSTypes.formatTypeEnv (taiVariableTypes typedInfo)
-  , "Expression Types: " <> T.pack (show $ Map.size $ taiExpressionTypes typedInfo) <> " entries"
-  , "Literal Types: " <> T.pack (show $ Map.size $ taiLiteralTypes typedInfo) <> " entries"
-  , "Type Resolutions: " <> T.pack (show $ Map.size $ taiTypeResolutions typedInfo) <> " entries"
-  ]
+-- | Extract inferred type from a typed expression
+extractInferredType :: TypedAST KExpr -> TSTypes.Type
+extractInferredType typedExpr =
+  let typeInfo = extractTypeInfo typedExpr
+      exprInfo = unExprTypeInfo typeInfo
+  in etiInferredType exprInfo
+
+-- | Extract variable type from a typed variable
+extractVariableType :: TypedAST KVariable -> TSTypes.Type
+extractVariableType typedVar =
+  let typeInfo = extractTypeInfo typedVar
+      varInfo = unVariableTypeInfo typeInfo
+  in vtiInferredType varInfo
+
+-- | Extract type scheme from a typed variable (if polymorphic)
+extractTypeScheme :: TypedAST KVariable -> Maybe TSTypes.TypeScheme
+extractTypeScheme typedVar =
+  let typeInfo = extractTypeInfo typedVar
+      varInfo = unVariableTypeInfo typeInfo
+  in vtiTypeScheme varInfo
+
+-- | Get expression type information
+getExpressionType :: TypedAST KExpr -> (TSTypes.Type, Map.Map T.Text TSTypes.Type)
+getExpressionType typedExpr =
+  let typeInfo = extractTypeInfo typedExpr
+      exprInfo = unExprTypeInfo typeInfo
+  in (etiInferredType exprInfo, etiLocalBindings exprInfo)
+
+-- | Get variable type information
+getVariableInfo :: TypedAST KVariable -> (TSTypes.Type, Maybe TSTypes.TypeScheme)
+getVariableInfo typedVar =
+  let typeInfo = extractTypeInfo typedVar
+      varInfo = unVariableTypeInfo typeInfo
+  in (vtiInferredType varInfo, vtiTypeScheme varInfo)
