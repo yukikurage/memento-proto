@@ -9,8 +9,8 @@ import Language.Memento.Syntax.Expr (Expr)
 import Language.Memento.Syntax.Literal (Literal)
 import Language.Memento.Syntax.MType (MType)
 import Language.Memento.Syntax.Pattern (Pattern)
-import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLiteral, KPattern, KProgram, KType, KVariable)
-import Language.Memento.Syntax.Variable (Variable)
+import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLiteral, KPattern, KProgram, KType, KVariable, KTypeVariable)
+import Language.Memento.Syntax.Variable (Variable, TypeVariable)
 
 class CoreParser m where
   parseLexeme :: m a -> m a
@@ -24,6 +24,7 @@ class CoreParser m where
 
 class VariableParser f m where
   parseVariable :: m (f KVariable)
+  parseTypeVariable :: m (f KTypeVariable)
 
 class LiteralParser f m where
   parseLiteral :: m (f KLiteral)

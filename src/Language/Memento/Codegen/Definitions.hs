@@ -11,7 +11,7 @@ import Language.Memento.Data.HFix (unHFix)
 import Language.Memento.Data.HProduct ((:*:) (..))
 import Language.Memento.Syntax (AST, unMType)
 import Language.Memento.Syntax.MType (MType (TFunction, TVar, TApplication))
-import Language.Memento.Syntax.Tag (KExpr, KType, KVariable)
+import Language.Memento.Syntax.Tag (KExpr, KType, KVariable, KTypeVariable)
 import Language.Memento.Syntax.Definition (ConstructorDef (..))
 
 type DefinitionResult = (List (Text, Text)) -- (argName, argValue) -> const argName = argValue

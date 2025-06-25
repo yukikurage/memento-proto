@@ -171,8 +171,8 @@ calculateInstanceFromBounds :: Bounds -> Maybe Type
 calculateInstanceFromBounds (Bounds lowers uppers)
   | TNever `elem` uppers = Just TNever
   | TUnknown `elem` lowers = Just TUnknown
-  | (TGeneric g) : _ <- takeGenericsOnly lowers = Just (TGeneric g) -- Prefer generic types
-  | (TGeneric g) : _ <- takeGenericsOnly uppers = Just (TGeneric g) -- Prefer generic types
+  -- \| (TGeneric g) : _ <- takeGenericsOnly lowers = Just (TGeneric g) -- Prefer generic types
+  -- \| (TGeneric g) : _ <- takeGenericsOnly uppers = Just (TGeneric g) -- Prefer generic types
   | not (Set.null intersections) =
       -- Pick any element from intersections, but avoid self-substitution
       -- We want to allow x <- y but not x <- x
@@ -279,25 +279,25 @@ calculateFullPropagationAll as cs =
 -- | Try to instantiate type variables as much as possible
 substInstancesAsPossible :: (AssumptionSet, ConstraintSet) -> (AssumptionSet, ConstraintSet)
 substInstancesAsPossible (as, cs) =
-  -- trace ("substInstancesAsPossible: " ++ formatConstraintSet cs ++ "\n") $
-  let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
-      vars = Set.unions (Set.map constraintVars csFiltered)
-      -- boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
-      -- instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
-      -- -- Filter out self-substitutions (x <- x)
-      -- validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
-      mValidInstance =
-        headMay $
-          filter (\(var, instType) -> TVar var /= instType) $
-            mapMaybe
-              (\var -> (var,) <$> calculateInstanceFromBounds (calculateBounds var csFiltered))
-              (Set.toList vars)
-   in case mValidInstance of
-        Just (var, instanceType) ->
-          let newCs = applySubstConstraintSet var instanceType csFiltered
-              newAs = applySubstConstraintSet var instanceType as
-           in substInstancesAsPossible (newAs, newCs) -- Recur with the new constraints
-        Nothing -> (as, calculateFullPropagationAll as csFiltered)
+  trace (T.unpack $ "substInstancesAsPossible: " <> formatConstraintSet cs <> "\n") $
+    let csFiltered = filterTrivialConstraints cs -- Remove reflexive constraints
+        vars = Set.unions (Set.map constraintVars csFiltered)
+        -- boundsMap = Map.fromList [(var, calculateBounds var csFiltered) | var <- Set.toList vars]
+        -- instances = Map.mapMaybe calculateInstanceFromBounds boundsMap
+        -- -- Filter out self-substitutions (x <- x)
+        -- validInstances = Map.filterWithKey (\var instType -> TVar var /= instType) instances
+        mValidInstance =
+          headMay $
+            filter (\(var, instType) -> TVar var /= instType) $
+              mapMaybe
+                (\var -> (var,) <$> calculateInstanceFromBounds (calculateBounds var csFiltered))
+                (Set.toList vars)
+     in case mValidInstance of
+          Just (var, instanceType) ->
+            let newCs = applySubstConstraintSet var instanceType csFiltered
+                newAs = applySubstConstraintSet var instanceType as
+             in substInstancesAsPossible (newAs, newCs) -- Recur with the new constraints
+          Nothing -> (as, calculateFullPropagationAll as csFiltered)
 
 {- | Branching BRANCH node (ref : DECOMPOSE.md)
 | with some nodes, may contain substitutions

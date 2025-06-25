@@ -9,6 +9,7 @@ data KLiteral :: Type
 
 {- Variables -}
 data KVariable :: Type
+data KTypeVariable :: Type
 
 {- Types -}
 data KType :: Type

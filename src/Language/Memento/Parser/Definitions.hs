@@ -16,7 +16,7 @@ import qualified Language.Memento.Parser.Class as PClass
 import Language.Memento.Syntax (extractSyntax, unMType)
 import Language.Memento.Syntax.Definition (ConstructorDef (..), Definition (..))
 import qualified Language.Memento.Syntax.MType as SMType
-import Language.Memento.Syntax.Tag (KDefinition, KType, KVariable, KExpr, KPattern)
+import Language.Memento.Syntax.Tag (KDefinition, KType, KVariable, KTypeVariable, KExpr, KPattern)
 import qualified Language.Memento.Syntax.Expr as SExpr
 import qualified Language.Memento.Syntax.Pattern as SPattern
 import Text.Megaparsec (MonadParsec, choice, sepBy, try, (<?>))
@@ -29,9 +29,9 @@ parseTypeParameters ::
   , PClass.CoreParser m
   , PClass.VariableParser f m
   ) =>
-  m [f KVariable]
+  m [f KTypeVariable]
 parseTypeParameters = do
-  try (PClass.parseAngleBrackets $ sepBy PClass.parseVariable (PClass.parseSymbol ","))
+  try (PClass.parseAngleBrackets $ sepBy PClass.parseTypeVariable (PClass.parseSymbol ","))
     <|> return [] -- Empty list if no type parameters
 
 parseTypeAssignments ::

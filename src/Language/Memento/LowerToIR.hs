@@ -153,10 +153,10 @@ lowerType syntax =
           retType = lowerType (extractSyntax returnType)
       in IR.IRTFunction paramTypes retType
     TVar varAST -> 
-      let Var varName = unVariable (extractSyntax varAST)
+      let TypeVar varName = unTypeVariable (extractSyntax varAST)
       in IR.IRTData varName  -- Type variables become data references
     TApplication baseAST _args ->
-      let Var baseName = unVariable (extractSyntax baseAST)
+      let TypeVar baseName = unTypeVariable (extractSyntax baseAST)
       in IR.IRTData baseName  -- Polymorphic types become simple data references
     TUnknown -> IR.IRTUnknown
     TNever -> IR.IRTUnknown

@@ -162,7 +162,7 @@ parseVarType ::
 parseVarType =
   ( PClass.parseFix @h $ do
       _ <- getSourcePos
-      var <- PClass.parseVariable
+      var <- PClass.parseTypeVariable
       return $ hInject $ TVar var
   )
     <?> "type variable"
@@ -182,7 +182,7 @@ parseTypeApplication =
   ( PClass.parseFix @h $ do
       _ <- getSourcePos
       -- Parse the base type (as a type variable for now)
-      baseVar <- PClass.parseVariable
+      baseVar <- PClass.parseTypeVariable
       
       -- Parse the type arguments <T1, T2, ...> using proper angle bracket parser
       args <- PClass.parseAngleBrackets $ sepBy (parseTypeExpr @h) (PClass.parseSymbol ",")

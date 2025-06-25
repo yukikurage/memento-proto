@@ -34,7 +34,7 @@ import qualified Language.Memento.Syntax.MType as SMType
 import Language.Memento.Syntax.Metadata (Metadata (..))
 import qualified Language.Memento.Syntax.Pattern as SPattern
 import qualified Language.Memento.Syntax.Program as SProgram
-import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable)
+import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable, KTypeVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
 import Language.Memento.TypeSolver.Assumption (calculateGenericBounds)
 import Language.Memento.TypeSolver.Solver (solve)
@@ -200,7 +200,7 @@ convertMType ast = do
     SMType.TNever -> return TNever
     SMType.TUnknown -> return TUnknown
     SMType.TVar varAst -> do
-      let SVariable.Var name = unVariable (extractSyntax varAst)
+      let SVariable.TypeVar name = unTypeVariable (extractSyntax varAst)
       case name of
         "string" -> return TString
         "number" -> return TNumber
@@ -237,7 +237,7 @@ convertMType ast = do
       convertedTypes <- mapM convertMType types
       return $ mkIntersection convertedTypes
     SMType.TApplication baseAst argAsts -> do
-      let SVariable.Var baseName = unVariable (extractSyntax baseAst)
+      let SVariable.TypeVar baseName = unTypeVariable (extractSyntax baseAst)
       ctx <- get
 
       case Map.lookup baseName (icTypeConstructors ctx) of
@@ -248,7 +248,7 @@ convertMType ast = do
               SomeTypeError $
                 "Type constructor " <> baseName <> " expects " <> T.pack (show k) <> " arguments, got " <> T.pack (show (length argAsts))
         Nothing | Set.member baseName (icTemporaryTypeConstructors ctx) -> pure ()
-        Nothing -> throwError $ UnboundTypeVariable (Just meta) $ baseName
+        Nothing -> throwError $ UnboundTypeVariable (Just meta) baseName
 
       argTypes <- mapM convertMType argAsts
       return $ TApplication baseName argTypes
@@ -326,8 +326,8 @@ collectDefinitionType ast =
  where
   collectPolymorphicValType name typeParams typeAst = do
     let paramNames =
-          [ case unVariable (extractSyntax paramAst) of
-            SVariable.Var paramName -> paramName
+          [ case unTypeVariable (extractSyntax paramAst) of
+            SVariable.TypeVar paramName -> paramName
           | paramAst <- typeParams
           ]
 
@@ -380,8 +380,8 @@ checkSingleDefinition ast =
 
   checkValBody name typeParams typeAst exprAst = do
     let paramNames =
-          [ case unVariable (extractSyntax paramAst) of
-            SVariable.Var paramName -> paramName
+          [ case unTypeVariable (extractSyntax paramAst) of
+            SVariable.TypeVar paramName -> paramName
           | paramAst <- typeParams
           ]
 
@@ -447,8 +447,8 @@ inferDecl ast =
  where
   inferPolymorphicVal name typeParams typeAst exprAst = do
     let paramNames =
-          [ case unVariable (extractSyntax paramAst) of
-            SVariable.Var paramName -> paramName
+          [ case unTypeVariable (extractSyntax paramAst) of
+            SVariable.TypeVar paramName -> paramName
           | paramAst <- typeParams
           ]
 
@@ -488,8 +488,8 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
   -- Here, `<T, number> of Typ<T, number>` are type parameters, `<T>` of `Cons<T>` is a constructor type parameters.
 
   let constructorTypeParamNames =
-        [ case unVariable (extractSyntax paramAst) of
-          SVariable.Var paramName -> paramName
+        [ case unTypeVariable (extractSyntax paramAst) of
+          SVariable.TypeVar paramName -> paramName
         | paramAst <- typeParams
         ]
 
@@ -515,6 +515,9 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
       { icGenericTypes = savedGenericTypes
       }
 
+  let
+    fullTypeMeta = extractMetadata fullTypeAst
+
   case unfoldFunctionType fullType of
     Just (argTypes, retType) -> do
       case retType of
@@ -537,7 +540,7 @@ inferConstructorDef dataName (SDefinition.ConstructorDef ctorNameAst typeParams 
           let typeScheme = TypeScheme freshGenerics fullType
           addVarScheme ctorName typeScheme
           return TypeConstructorInfo{tciKind = tciKind, tciVariance = tciVariance, tciConstructors = [ctorName]}
-        _ -> throwError $ TypeMismatch Nothing (TVar (TypeVar dataName)) retType
+        _ -> throwError $ TypeMismatch (Just fullTypeMeta) (TVar (TypeVar dataName)) retType
     Nothing ->
       throwError $ SomeTypeError $ "Constructor type must be a function, got: " <> formatType fullType
  where

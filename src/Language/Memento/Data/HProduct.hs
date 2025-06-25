@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
@@ -32,3 +33,15 @@ instance HFunctor HUnit where
 
 instance (HFunctor h1, HFunctor h2) => HFunctor (h1 :*: h2) where
   hmap f (h1 :*: h2) = hmap f h1 :*: hmap f h2
+
+-- | Extract a component from a product type.
+class Extractive h1 h2 where
+  hExtract :: forall (f :: Type -> Type) a. h2 f a -> h1 f a
+
+instance {-# OVERLAPPING #-} Extractive h1 (h2 :*: h1) where
+  hExtract :: (h2 :*: h1) f a -> h1 f a
+  hExtract (h2' :*: h1') = h1'
+
+instance {-# OVERLAPPABLE #-} (Extractive h1 h2) => Extractive h1 (h2 :*: h3) where
+  hExtract :: (h2 :*: h3) f a -> h1 f a
+  hExtract (h2' :*: h3') = hExtract h2'

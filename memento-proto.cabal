@@ -79,6 +79,7 @@ library
     Language.Memento.TypeSolver.Solver
     Language.Memento.TypeSolver.Subtype
     Language.Memento.TypeSolver.Types
+    Language.Memento.TypeSolver.Variance
   other-modules:
     Paths_memento_proto
   hs-source-dirs:

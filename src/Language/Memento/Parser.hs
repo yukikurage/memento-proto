@@ -10,7 +10,7 @@ import Data.Text
 import qualified Data.Text as T
 import Data.Void
 import Language.Memento.Data.HFix (HFix (..))
-import Language.Memento.Data.HProduct ((:*:) (..))
+import Language.Memento.Data.HProduct (HUnit (HUnit), (:*:) (..))
 import Language.Memento.Parser.Class
 import qualified Language.Memento.Parser.Core as Core
 import qualified Language.Memento.Parser.Definitions as Def
@@ -34,13 +34,13 @@ instance FixParser Syntax AST Parser where
   parseFix :: Parser (Syntax AST a) -> Parser (AST a)
   parseFix p = do
     (meta, hast) <- Meta.parseMetadata p
-    return $ HFix{unHFix = meta :*: hast}
+    return $ HFix{unHFix = HUnit :*: meta :*: hast}
 
 instance PropagateFix Syntax AST where
   propagateFix :: AST c -> AST b -> Syntax AST a -> AST a
-  propagateFix (HFix{unHFix = meta :*: _}) (HFix{unHFix = meta' :*: _}) syntax =
+  propagateFix (HFix{unHFix = HUnit :*: meta :*: _}) (HFix{unHFix = HUnit :*: meta' :*: _}) syntax =
     let meta'' = Meta.propagateMetadata meta meta'
-     in HFix{unHFix = meta'' :*: syntax}
+     in HFix{unHFix = HUnit :*: meta'' :*: syntax}
 
 instance CoreParser Parser where
   parseLexeme :: Parser a -> Parser a
@@ -62,6 +62,7 @@ instance CoreParser Parser where
 
 instance VariableParser AST Parser where
   parseVariable = Var.parseVariable @Syntax
+  parseTypeVariable = Var.parseTypeVariable @Syntax
 
 instance LiteralParser AST Parser where
   parseLiteral = Lit.parseLiteral @Syntax
