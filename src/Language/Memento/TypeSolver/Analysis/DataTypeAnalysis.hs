@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.TypeSolver.DataTypeAnalysis
+module Language.Memento.TypeSolver.Analysis.DataTypeAnalysis
   ( DataTypeInfo (..),
     ConstructorInfo (..),
     TypeParameterInfo (..),
@@ -20,7 +20,7 @@ import qualified Language.Memento.Syntax.MType as SMType
 import qualified Language.Memento.Syntax.Program as SProgram
 import Language.Memento.Syntax.Tag (KDefinition, KProgram, KType, KTypeVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Core.Types
 
 -- | Information about a single constructor in a data type
 data ConstructorInfo = ConstructorInfo

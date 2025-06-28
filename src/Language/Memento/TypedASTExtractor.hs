@@ -12,9 +12,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import qualified Language.Memento.IR as IR
-import qualified Language.Memento.TypeSolver.Types as TST
-import Language.Memento.TypeSolver.TypeInfo
-import Language.Memento.TypeSolver.Types (TypeScheme(..))
+import qualified Language.Memento.TypeSolver.Core.Types as TST
+import Language.Memento.TypeSolver.TypedAST.TypeInfo
+import Language.Memento.TypeSolver.Core.Types (TypeScheme(..))
 import Language.Memento.LowerToIR
 import Language.Memento.Syntax
 import Language.Memento.Syntax.Tag

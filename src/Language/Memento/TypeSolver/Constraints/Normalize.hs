@@ -1,10 +1,10 @@
-module Language.Memento.TypeSolver.Normalize where
+module Language.Memento.TypeSolver.Constraints.Normalize where
 
 import Control.Applicative (liftA2)
 import Control.Monad.Error.Class (MonadError)
 import qualified Data.Set as Set
-import Language.Memento.TypeSolver.Subtype
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Constraints.Subtype
+import Language.Memento.TypeSolver.Core.Types
 
 normalize ::
   forall m.

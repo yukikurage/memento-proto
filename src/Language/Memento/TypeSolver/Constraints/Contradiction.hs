@@ -2,7 +2,7 @@
 
 -- | Contradiction checking for the Memento type solver
 -- Checks for contradictory type constraints that cannot be satisfied
-module Language.Memento.TypeSolver.Contradiction
+module Language.Memento.TypeSolver.Constraints.Contradiction
   ( checkContradictions,
   )
 where
@@ -10,8 +10,8 @@ where
 import Control.Monad (mapM_)
 import Control.Monad.Error.Class (MonadError, throwError)
 import qualified Data.Set as Set
-import Language.Memento.TypeSolver.Subtype (isSubtype)
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Constraints.Subtype (isSubtype)
+import Language.Memento.TypeSolver.Core.Types
 
 -- | Check for contradictory constraints
 -- For constraints without variables, verify that subtype relationships hold

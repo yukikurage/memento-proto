@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Language.Memento.TypeSolver.Subtype where
+module Language.Memento.TypeSolver.Constraints.Subtype where
 
 import Control.Monad (when, zipWithM)
 import Control.Monad.Error.Class (MonadError (throwError))
@@ -11,7 +11,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace)
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Core.Types
 
 someM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
 someM _ [] = pure False

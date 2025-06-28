@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Language.Memento.TypeSolver.VarianceAnalysis
+module Language.Memento.TypeSolver.Analysis.VarianceAnalysis
   ( VarianceExpr (..),
     VarianceSystem,
     VarianceAnalysis (..),
@@ -16,8 +16,8 @@ import Language.Memento.Syntax
 import qualified Language.Memento.Syntax.MType as SMType
 import Language.Memento.Syntax.Tag (KType, KTypeVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
-import Language.Memento.TypeSolver.DataTypeAnalysis (DataTypeInfo(..), ConstructorInfo(..), TypeParameterInfo(..), DataTypeAnalysis(..))
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Analysis.DataTypeAnalysis (DataTypeInfo(..), ConstructorInfo(..), TypeParameterInfo(..), DataTypeAnalysis(..))
+import Language.Memento.TypeSolver.Core.Types
 
 -- | Variance expression representing how a type parameter appears
 data VarianceExpr

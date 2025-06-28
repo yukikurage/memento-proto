@@ -6,9 +6,9 @@
 
 module Language.Memento.Parser where
 
-import Data.Text
+import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Void
+import Data.Void (Void)
 import Language.Memento.Data.HFix (HFix (..))
 import Language.Memento.Data.HProduct (HUnit (HUnit), (:*:) (..))
 import Language.Memento.Parser.Class
@@ -25,8 +25,7 @@ import Language.Memento.Syntax (AST, Syntax)
 import Language.Memento.Syntax.Metadata (Metadata)
 import Language.Memento.Syntax.Tag (KProgram)
 import Language.Memento.Syntax.Variable (Variable)
-import Text.Megaparsec
-import Text.Megaparsec (ParseErrorBundle, errorBundlePretty, parse)
+import Text.Megaparsec (MonadParsec (eof), ParseErrorBundle, Parsec, errorBundlePretty, parse)
 
 type Parser = Parsec Void Text
 

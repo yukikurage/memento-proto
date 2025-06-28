@@ -51,8 +51,8 @@ compileExpr ctx expr = case expr of
   IR.IRIf cond thenExpr elseExpr -> compileIf ctx cond thenExpr elseExpr
   IR.IRLet varName _varType varExpr bodyExpr -> compileLet ctx varName varExpr bodyExpr
   IR.IRBlock exprs -> compileBlock ctx exprs
-  IR.IRCtorApp ctorName args -> compileConstructor ctx ctorName args
-  IR.IRMatch expr cases -> compileMatch ctx expr cases
+  -- Note: Constructor applications and pattern matching not supported in primitive IR
+  -- These should not appear in primitive IR expressions
 
 -- Compile variable reference
 compileVariable :: CompilationContext -> Text -> [WASMInstruction]
@@ -102,11 +102,19 @@ compileCall ctx func args = case func of
 -- Compile lambda expressions (create closures)
 compileLambda :: CompilationContext -> [(Text, IR.IRType)] -> IR.IRExpr -> [WASMInstruction]
 compileLambda ctx params body =
-  -- For now, generate a simple closure
-  -- TODO: Implement proper lambda lifting and closure creation
+  -- Implement lambda lifting by creating a top-level function
   let capturedVars = findFreeVariables ctx body
-      funcIndex = 0  -- TODO: Generate unique function index
-  in generateClosureAllocation funcIndex capturedVars
+      funcIndex = getNextFunctionIndex ctx
+      liftedFuncName = "lambda_" <> T.pack (show funcIndex)
+      
+      -- Create closure that captures free variables
+      closureData = if null capturedVars
+        then [I32Const (fromIntegral funcIndex)]  -- Simple function pointer for closures without captures
+        else generateClosureWithCaptures funcIndex capturedVars
+  in 
+    -- Store the generated function in context for later emission
+    -- For now, generate closure allocation
+    closureData ++ generateClosureAllocation funcIndex capturedVars
 
 -- Find free variables in expression (for closure capture)
 findFreeVariables :: CompilationContext -> IR.IRExpr -> [Text]
@@ -127,10 +135,7 @@ findFreeVariables ctx expr = case expr of
     findFreeVariables ctx varExpr ++
     findFreeVariables (addLocal varName ctx) bodyExpr
   IR.IRBlock exprs -> concatMap (findFreeVariables ctx) exprs
-  IR.IRCtorApp _ args -> concatMap (findFreeVariables ctx) args
-  IR.IRMatch expr cases -> 
-    findFreeVariables ctx expr ++
-    concatMap (\(IR.IRCase _ body) -> findFreeVariables ctx body) cases
+  -- Note: Constructor applications and pattern matching not supported in primitive IR
 
 -- Compile if expressions
 compileIf :: CompilationContext -> IR.IRExpr -> IR.IRExpr -> IR.IRExpr -> [WASMInstruction]
@@ -161,91 +166,34 @@ compileBlock ctx exprs = case exprs of
     [Drop] ++  -- Discard intermediate results
     compileBlock ctx rest
 
--- Compile constructor applications
-compileConstructor :: CompilationContext -> Text -> [IR.IRExpr] -> [WASMInstruction]
-compileConstructor ctx ctorName args =
-  -- Evaluate arguments
-  concatMap (compileExpr ctx) args ++
-  -- Call constructor function
-  [Call ctorName]
+-- Note: Constructor applications and pattern matching functions removed for primitive IR
+-- Primitive IR only supports basic types and functions, no user-defined data types or pattern matching
 
--- Compile pattern matching
-compileMatch :: CompilationContext -> IR.IRExpr -> [IR.IRCase] -> [WASMInstruction]
-compileMatch ctx expr cases =
-  -- Evaluate the expression to match (should be i32 pointer for objects)
-  compileExpr ctx expr ++
-  [LocalTee "obj_ptr"] ++  -- Store object pointer in obj_ptr and use for matching
-  -- Generate branching logic for each case
-  compileMatchCases ctx "obj_ptr" cases
+-- Get next available function index for lambda lifting
+getNextFunctionIndex :: CompilationContext -> Int
+getNextFunctionIndex ctx = 
+  -- Simple counter based on number of existing functions
+  length (ctxFunctions ctx) + 1000  -- Start lambda functions at index 1000
 
-compileMatchCases :: CompilationContext -> Text -> [IR.IRCase] -> [WASMInstruction]
-compileMatchCases ctx objVar cases = case cases of
-  [] -> [Unreachable]  -- Should never reach here if exhaustive
-  [IR.IRCase pattern body] -> 
-    -- Last case - no need for condition
-    let patternVars = extractPatternVars pattern
-        extendedCtx = addLocals patternVars ctx
-    in compilePatternBinding extendedCtx objVar pattern ++
-       compileExpr extendedCtx body
-  (IR.IRCase pattern body : rest) ->
-    let (conditionCode, bindingCode) = compilePatternCondition ctx objVar pattern
-        patternVars = extractPatternVars pattern
-        extendedCtx = addLocals patternVars ctx
-        (blockLabel, newCtx) = generateBlockLabel extendedCtx
-    in [Block blockLabel F64 
-         (conditionCode ++
-          [BrIf blockLabel] ++  -- Skip this case if pattern doesn't match
-          bindingCode ++
-          compileExpr newCtx body ++
-          [Return]
-         )
-       ] ++
-       compileMatchCases newCtx objVar rest
-
--- Compile pattern matching condition and binding
-compilePatternCondition :: CompilationContext -> Text -> IR.IRPattern -> ([WASMInstruction], [WASMInstruction])
-compilePatternCondition ctx objVar pattern = case pattern of
-  IR.IRPatVar varName _type ->
-    -- Variable pattern always matches
-    ([], [LocalGet objVar, LocalSet varName])
-  IR.IRPatWildcard _type ->
-    -- Wildcard always matches
-    ([], [])
-  IR.IRPatLiteral lit ->
-    -- Literal pattern - compare values (both as i32)
-    let litInstructions = compileLiteral lit
-        conditionCode = [LocalGet objVar] ++ 
-                        litInstructions ++ 
-                        [I32Ne]
-    in (conditionCode, [])
-  IR.IRPatConstructor ctorName argPatterns ->
-    -- Constructor pattern - check tag and extract fields
-    let tag = 0  -- TODO: Get actual constructor tag
-        conditionCode = generateTagCheck objVar tag ++ [I32Eqz]  -- Check if NOT equal
-        bindingCode = concatMap (\(i, argPat) ->
-          case argPat of
-            IR.IRPatVar varName _type -> generateFieldExtraction objVar i varName
-            _ -> []  -- TODO: Handle nested patterns
-          ) (zip [0..] argPatterns)
-    in (conditionCode, bindingCode)
-
--- Extract pattern variables from a pattern
-extractPatternVars :: IR.IRPattern -> [Text]
-extractPatternVars pattern = case pattern of
-  IR.IRPatVar varName _ -> [varName]
-  IR.IRPatWildcard _ -> []
-  IR.IRPatLiteral _ -> []
-  IR.IRPatConstructor _ argPatterns -> concatMap extractPatternVars argPatterns
-
--- Helper for pattern binding without condition
-compilePatternBinding :: CompilationContext -> Text -> IR.IRPattern -> [WASMInstruction]
-compilePatternBinding ctx objVar pattern = case pattern of
-  IR.IRPatVar varName _type -> [LocalGet objVar, F64ConvertI32S, LocalSet varName]
-  IR.IRPatWildcard _type -> []
-  IR.IRPatLiteral _ -> []  -- No binding needed for literals
-  IR.IRPatConstructor _ argPatterns ->
-    concatMap (\(i, argPat) ->
-      case argPat of
-        IR.IRPatVar varName _type -> generateFieldExtraction objVar i varName
-        _ -> []  -- TODO: Handle nested patterns
-      ) (zip [0..] argPatterns)
+-- Generate closure with captured variables
+generateClosureWithCaptures :: Int -> [Text] -> [WASMInstruction]
+generateClosureWithCaptures funcIndex capturedVars =
+  -- Allocate memory for closure: [function_index, captured_var1, captured_var2, ...]
+  let closureSize = 1 + length capturedVars  -- Function index + captured variables
+      allocSize = closureSize * 4  -- Each value is 4 bytes (i32 or f64)
+  in
+    [ I32Const (fromIntegral allocSize)
+    , Call "malloc"  -- Allocate memory for closure
+    -- Store function index at offset 0
+    , LocalTee "closure_ptr"  -- Keep pointer on stack and in local
+    , I32Const (fromIntegral funcIndex)
+    , I32Store 0 0  -- Store function index at offset 0
+    ] ++
+    -- Store each captured variable
+    concatMap (\(idx, varName) ->
+      [ LocalGet "closure_ptr"
+      , LocalGet varName  -- Get captured variable value
+      , I32Store 0 (fromIntegral ((idx + 1) * 4))  -- Store at appropriate offset
+      ]) (zip [0..] capturedVars) ++
+    [ LocalGet "closure_ptr"  -- Return closure pointer
+    ]

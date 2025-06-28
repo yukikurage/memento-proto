@@ -35,6 +35,7 @@ library
     Language.Memento.Codegen.Literal
     Language.Memento.Codegen.Pattern
     Language.Memento.Codegen.Programs
+    Language.Memento.CodegenJS
     Language.Memento.CodegenWASM
     Language.Memento.CodegenWASM.Control
     Language.Memento.CodegenWASM.Data
@@ -74,21 +75,21 @@ library
     Language.Memento.Syntax.Variable
     Language.Memento.TypedASTExtractor
     Language.Memento.TypeSolver
-    Language.Memento.TypeSolver.Assumption
-    Language.Memento.TypeSolver.ConstraintGenerator
-    Language.Memento.TypeSolver.Contradiction
-    Language.Memento.TypeSolver.DataTypeAnalysis
-    Language.Memento.TypeSolver.Normalize
-    Language.Memento.TypeSolver.Propagation
-    Language.Memento.TypeSolver.SolverPipeline
-    Language.Memento.TypeSolver.SolverUtils
-    Language.Memento.TypeSolver.Subtype
-    Language.Memento.TypeSolver.TypedASTBuilder
-    Language.Memento.TypeSolver.TypeEnvironment
-    Language.Memento.TypeSolver.TypeInference
-    Language.Memento.TypeSolver.TypeInfo
-    Language.Memento.TypeSolver.Types
-    Language.Memento.TypeSolver.VarianceAnalysis
+    Language.Memento.TypeSolver.Analysis.DataTypeAnalysis
+    Language.Memento.TypeSolver.Analysis.VarianceAnalysis
+    Language.Memento.TypeSolver.Constraints.Assumption
+    Language.Memento.TypeSolver.Constraints.ConstraintGenerator
+    Language.Memento.TypeSolver.Constraints.Contradiction
+    Language.Memento.TypeSolver.Constraints.Normalize
+    Language.Memento.TypeSolver.Constraints.Propagation
+    Language.Memento.TypeSolver.Constraints.SolverPipeline
+    Language.Memento.TypeSolver.Constraints.SolverUtils
+    Language.Memento.TypeSolver.Constraints.Subtype
+    Language.Memento.TypeSolver.Core.TypeEnvironment
+    Language.Memento.TypeSolver.Core.TypeInference
+    Language.Memento.TypeSolver.Core.Types
+    Language.Memento.TypeSolver.TypedAST.TypedASTBuilder
+    Language.Memento.TypeSolver.TypedAST.TypeInfo
   other-modules:
     Paths_memento_proto
   hs-source-dirs:

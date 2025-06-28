@@ -2,7 +2,7 @@
 
 -- | Constraint propagation for the Memento type solver
 -- Propagates type variable bounds through constraint sets
-module Language.Memento.TypeSolver.Propagation
+module Language.Memento.TypeSolver.Constraints.Propagation
   ( calculatePropagationAll,
     calculatePropagation,
     calculateBounds,
@@ -13,7 +13,7 @@ where
 import Data.Maybe (catMaybes)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Core.Types
 
 -- | Extract all type variables from a constraint
 constraintVars :: Constraint -> Set.Set TypeVar

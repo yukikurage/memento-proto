@@ -2,7 +2,7 @@
 
 -- | Pure constraint generation for the Memento type solver
 -- Separates constraint generation logic from stateful type checking
-module Language.Memento.TypeSolver.ConstraintGenerator
+module Language.Memento.TypeSolver.Constraints.ConstraintGenerator
   ( ConstraintGenerationResult (..),
     ConstraintEnv (..),
     generateConstraints,
@@ -22,6 +22,7 @@ import Language.Memento.Syntax
 import qualified Language.Memento.Syntax.BinOp as SBinOp
 import qualified Language.Memento.Syntax.Definition as SDefinition
 import Language.Memento.Syntax.Expr (Expr (..), Let (..))
+import Language.Memento.Syntax.Pattern (Pattern (..))
 import qualified Language.Memento.Syntax.Literal as SLiteral
 import qualified Language.Memento.Syntax.MType as SMType
 import Language.Memento.Syntax.Metadata (Metadata (..))
@@ -29,7 +30,7 @@ import qualified Language.Memento.Syntax.Pattern as SPattern
 import qualified Language.Memento.Syntax.Program as SProgram
 import Language.Memento.Syntax.Tag (KBinOp, KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KTypeVariable, KVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Core.Types
 
 -- ============================================================================
 -- Core Types
@@ -173,15 +174,112 @@ inferExprMonadic env ast =
       return (allConstraints, exprType, finalCounter, allBindings)
     
     EMatch scrutinees cases -> do
-      -- Simplified match handling for now
+      -- Generate constraints for scrutinees
       (scrutineeResults, counterAfterScrutinees) <- processArgumentsMonadic env scrutinees
       let scrutineeConstraints = Set.unions [cs | (cs, _, _, _) <- scrutineeResults]
           scrutineeTypes = [t | (_, t, _, _) <- scrutineeResults]
-          (resultVar, finalCounter) = freshVarPure env { ceVarCounter = counterAfterScrutinees }
+          (resultVar, counterAfterCases) = freshVarPure env { ceVarCounter = counterAfterScrutinees }
           resultType = TVar resultVar
-          -- TODO: Process match cases properly
-          allConstraints = scrutineeConstraints
+      
+      -- Process match cases and generate constraints
+      (caseConstraints, finalCounter) <- processCases env { ceVarCounter = counterAfterCases } cases scrutineeTypes resultType
+      let allConstraints = Set.union scrutineeConstraints caseConstraints
       return (allConstraints, resultType, finalCounter, Map.empty)
+
+-- ============================================================================
+-- Pattern Matching Support
+-- ============================================================================
+
+-- | Process pattern match cases and generate constraints
+processCases :: ConstraintEnv -> [([(AST KPattern, Maybe (AST KType))], AST KExpr)] -> [Type] -> Type -> Either TypeError (ConstraintSet, Int)
+processCases env cases scrutineeTypes resultType = do
+  (allConstraints, finalCounter) <- foldM processCase (Set.empty, ceVarCounter env) cases
+  return (allConstraints, finalCounter)
+  where
+    processCase :: (ConstraintSet, Int) -> ([(AST KPattern, Maybe (AST KType))], AST KExpr) -> Either TypeError (ConstraintSet, Int)
+    processCase (accConstraints, currentCounter) (patternParams, exprAst) = do
+      -- For now, handle only single pattern cases (lambda-style matching)
+      case patternParams of
+        [(patAst, _)] -> do
+          -- Generate pattern constraints against scrutinee types
+          (patConstraints, patBindings, counterAfterPat) <- processPatternConstraints env { ceVarCounter = currentCounter } patAst scrutineeTypes
+          
+          -- Generate expression constraints with pattern bindings in scope
+          let envWithPattern = env { ceTypeEnv = Map.union patBindings (ceTypeEnv env), ceVarCounter = counterAfterPat }
+          (exprConstraints, exprType, counterAfterExpr, _) <- inferExprMonadic envWithPattern exprAst
+          
+          -- Generate constraint that expression type matches result type
+          let resultConstraint = Subtype exprType resultType
+              caseConstraints = Set.unions [accConstraints, patConstraints, exprConstraints, Set.singleton resultConstraint]
+          
+          return (caseConstraints, counterAfterExpr)
+        _ -> 
+          -- Multiple patterns in one case not yet supported
+          Left $ SomeTypeError "Multiple patterns per case not yet supported"
+
+-- | Process pattern constraints against scrutinee types
+processPatternConstraints :: ConstraintEnv -> AST KPattern -> [Type] -> Either TypeError (ConstraintSet, Map.Map T.Text TypeScheme, Int)
+processPatternConstraints env patAst scrutineeTypes = 
+  case unPattern (extractSyntax patAst) of
+    SPattern.PVar varAst -> do
+      -- Variable pattern: bind variable to scrutinee type
+      let SVariable.Var name = unVariable (extractSyntax varAst)
+          -- For multiple scrutinees, create union type
+          patternType = case scrutineeTypes of
+            [] -> TUnknown
+            [t] -> t
+            ts -> TUnion (Set.fromList ts)
+          binding = Map.singleton name (TypeScheme [] patternType)
+      return (Set.empty, binding, ceVarCounter env)
+    
+    SPattern.PWildcard -> 
+      -- Wildcard pattern: no constraints or bindings
+      return (Set.empty, Map.empty, ceVarCounter env)
+    
+    SPattern.PLiteral litAst -> do
+      -- Literal pattern: generate equality constraint
+      let literalType = convertLiteralPure litAst
+          constraints = Set.fromList [Subtype scrutineeType literalType | scrutineeType <- scrutineeTypes]
+      return (constraints, Map.empty, ceVarCounter env)
+    
+    SPattern.PCons ctorAst argPats -> do
+      -- Constructor pattern: handle constructor application
+      let SVariable.Var ctorName = unVariable (extractSyntax ctorAst)
+      case Set.member ctorName (ceConstructors env) of
+        False -> Left $ UnboundVariable (Just $ extractMetadata patAst) ctorName
+        True -> do
+          -- Generate fresh variable for constructor result type
+          let (ctorResultVar, counterAfterCtor) = freshVarPure env
+              ctorResultType = TVar ctorResultVar
+              
+          -- Process argument patterns
+          (argConstraints, argBindings, finalCounter) <- processArgumentPatterns env { ceVarCounter = counterAfterCtor } argPats
+          
+          -- Create constructor application constraint
+          let ctorConstraints = Set.fromList [Subtype scrutineeType ctorResultType | scrutineeType <- scrutineeTypes]
+              allConstraints = Set.union argConstraints ctorConstraints
+              
+          return (allConstraints, argBindings, finalCounter)
+
+-- | Process argument patterns for constructor patterns
+processArgumentPatterns :: ConstraintEnv -> [AST KPattern] -> Either TypeError (ConstraintSet, Map.Map T.Text TypeScheme, Int)
+processArgumentPatterns env argPats = do
+  (allConstraints, allBindings, finalCounter) <- foldM processArgPattern (Set.empty, Map.empty, ceVarCounter env) argPats
+  return (allConstraints, allBindings, finalCounter)
+  where
+    processArgPattern :: (ConstraintSet, Map.Map T.Text TypeScheme, Int) -> AST KPattern -> Either TypeError (ConstraintSet, Map.Map T.Text TypeScheme, Int)
+    processArgPattern (accConstraints, accBindings, currentCounter) argPat = do
+      -- Generate fresh type variable for argument
+      let (argVar, counterAfterArg) = freshVarPure env { ceVarCounter = currentCounter }
+          argType = TVar argVar
+      
+      -- Process argument pattern
+      (argConstraints, argBindings, finalCounter) <- processPatternConstraints env { ceVarCounter = counterAfterArg } argPat [argType]
+      
+      let combinedConstraints = Set.union accConstraints argConstraints
+          combinedBindings = Map.union accBindings argBindings
+          
+      return (combinedConstraints, combinedBindings, finalCounter)
 
 -- ============================================================================
 -- Helper Functions
@@ -222,7 +320,12 @@ processLambdaParams env params =
           in (paramType : accTypes, newBindings, newCounter)
         SPattern.PWildcard ->
           (paramType : accTypes, accBindings, newCounter)
-        _ -> (paramType : accTypes, accBindings, newCounter)  -- TODO: Handle complex patterns
+        SPattern.PLiteral litAst ->
+          -- Literal patterns require type matching
+          (paramType : accTypes, accBindings, newCounter)
+        SPattern.PCons ctorAst argPats ->
+          -- Constructor patterns need destructuring
+          (paramType : accTypes, accBindings, newCounter)
 
 -- | Process argument expressions (monadic version)
 processArgumentsMonadic :: ConstraintEnv -> [AST KExpr] -> Either TypeError ([(ConstraintSet, Type, Int, Map.Map T.Text TypeScheme)], Int)

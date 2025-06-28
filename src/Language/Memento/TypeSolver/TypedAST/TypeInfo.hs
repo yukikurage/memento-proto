@@ -3,7 +3,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Language.Memento.TypeSolver.TypeInfo where
+module Language.Memento.TypeSolver.TypedAST.TypeInfo where
 
 import Data.Function ((&))
 import Data.Kind (Type)
@@ -17,7 +17,7 @@ import Language.Memento.Data.HProduct
 import Language.Memento.Syntax
 import Language.Memento.Syntax.Metadata
 import Language.Memento.Syntax.Tag (KExpr, KLiteral, KType, KVariable)
-import qualified Language.Memento.TypeSolver.Types as TSTypes
+import qualified Language.Memento.TypeSolver.Core.Types as TSTypes
 
 -- ============================================================================
 -- Type Information for Different AST Node Kinds

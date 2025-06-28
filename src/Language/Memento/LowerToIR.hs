@@ -5,8 +5,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import qualified Language.Memento.IR as IR
-import qualified Language.Memento.TypeSolver.Types as TST
-import Language.Memento.TypeSolver.Types (TypeScheme(..))
+import qualified Language.Memento.TypeSolver.Core.Types as TST
+import Language.Memento.TypeSolver.Core.Types (TypeScheme(..))
 import Language.Memento.Syntax
 import Language.Memento.Syntax.BinOp
 import Language.Memento.Syntax.Definition
@@ -18,15 +18,14 @@ import Language.Memento.Syntax.Program
 import Language.Memento.Syntax.Tag
 import Language.Memento.Syntax.Variable
 
--- Main function to convert AST to IR
+-- Main function to convert AST to primitive IR (no data types or pattern matching)
 lowerProgram :: AST KProgram -> IR.IRProgram
 lowerProgram astProgram = 
   let Program definitions = unProgram (extractSyntax astProgram)
-      (dataDefs, valueDefs) = partitionDefinitions definitions
+      valueDefs = filterValueDefinitions definitions  -- Skip data definitions
       (functions, globals) = partitionValues valueDefs
   in IR.IRProgram
-     { IR.irDataDefs = map lowerDataDef dataDefs
-     , IR.irFunctions = functions
+     { IR.irFunctions = functions
      , IR.irGlobals = globals
      , IR.irMainFunc = findMainFunction valueDefs
      }
@@ -35,21 +34,23 @@ lowerProgram astProgram =
 lowerProgramWithTypes :: AST KProgram -> Map.Map Text TypeScheme -> IR.IRProgram
 lowerProgramWithTypes astProgram typeEnv = 
   let Program definitions = unProgram (extractSyntax astProgram)
-      (dataDefs, valueDefs) = partitionDefinitions definitions
+      valueDefs = filterValueDefinitions definitions  -- Skip data definitions
       (functions, globals) = partitionValuesWithTypes valueDefs typeEnv
   in IR.IRProgram
-     { IR.irDataDefs = map lowerDataDef dataDefs
-     , IR.irFunctions = functions
+     { IR.irFunctions = functions
      , IR.irGlobals = globals
      , IR.irMainFunc = findMainFunction valueDefs
      }
 
-partitionDefinitions :: [AST KDefinition] -> ([AST KDefinition], [AST KDefinition])
-partitionDefinitions defs = 
-  let isDataDef ast = case unDefinition (extractSyntax ast) of
-        DataDef {} -> True
-        _ -> False
-  in (filter isDataDef defs, filter (not . isDataDef) defs)
+-- Filter out data definitions, keep only value definitions  
+filterValueDefinitions :: [AST KDefinition] -> [AST KDefinition]
+filterValueDefinitions defs = 
+  filter isValueDef defs
+  where
+    isValueDef ast = case unDefinition (extractSyntax ast) of
+      ValDef {} -> True
+      TypeDef {} -> True  -- Keep type aliases
+      DataDef {} -> False  -- Skip data definitions
 
 partitionValues :: [AST KDefinition] -> ([IR.IRFunction], [IR.IRGlobal])
 partitionValues valueDefs = 
@@ -101,26 +102,6 @@ extractReturnType syntax =
     TFunction _params returnType -> lowerType (extractSyntax returnType)
     _ -> IR.IRTUnknown
 
-lowerDataDef :: AST KDefinition -> IR.IRDataDef
-lowerDataDef astDef = 
-  case unDefinition (extractSyntax astDef) of
-    DataDef dataName constructors ->
-      let Var typeName = unVariable (extractSyntax dataName)
-          irConstructors = zipWith (lowerConstructor typeName) [0..] constructors
-      in IR.IRDataDef typeName irConstructors
-    _ -> error "Expected DataDef"
-
-lowerConstructor :: Text -> Int -> ConstructorDef AST -> IR.IRConstructor
-lowerConstructor _typeName tag (ConstructorDef ctorName _typeParams ctorType) =
-  let Var name = unVariable (extractSyntax ctorName)
-      fields = extractFieldTypes (extractSyntax ctorType)
-  in IR.IRConstructor name fields tag
-
-extractFieldTypes :: Syntax AST KType -> [IR.IRType]
-extractFieldTypes syntax = 
-  case unMType syntax of
-    TFunction params _returnType -> map (lowerType . extractSyntax . snd) params
-    _ -> []  -- Constructor with no fields
 
 lowerValueDef :: AST KDefinition -> IR.IRGlobal
 lowerValueDef astDef = 
@@ -152,17 +133,13 @@ lowerType syntax =
       let paramTypes = map (lowerType . extractSyntax . snd) params
           retType = lowerType (extractSyntax returnType)
       in IR.IRTFunction paramTypes retType
-    TVar varAST -> 
-      let TypeVar varName = unTypeVariable (extractSyntax varAST)
-      in IR.IRTData varName  -- Type variables become data references
-    TApplication baseAST _args ->
-      let TypeVar baseName = unTypeVariable (extractSyntax baseAST)
-      in IR.IRTData baseName  -- Polymorphic types become simple data references
+    TVar _ -> IR.IRTUnknown  -- Type variables become unknown in primitive IR
+    TApplication _ _ -> IR.IRTUnknown  -- Type applications become unknown in primitive IR
     TUnknown -> IR.IRTUnknown
     TNever -> IR.IRTUnknown
-    TLiteral _ -> IR.IRTUnknown  -- Literal types not supported in IR
-    TUnion _ -> IR.IRTUnknown    -- Union types not supported in IR
-    TIntersection _ -> IR.IRTUnknown  -- Intersection types not supported in IR
+    TLiteral _ -> IR.IRTUnknown
+    TUnion _ -> IR.IRTUnknown
+    TIntersection _ -> IR.IRTUnknown
 
 lowerExpr :: AST KExpr -> IR.IRExpr
 lowerExpr astExpr = 
@@ -202,14 +179,9 @@ lowerExpr astExpr =
           body = lowerExpr bodyAST
       in foldr (\(name, ty, expr) acc -> IR.IRLet name ty expr acc) body lets
     
-    EMatch exprsAST casesAST ->
-      -- Simplified: only handle single expression matching
-      case exprsAST of
-        [exprAST] -> 
-          let expr = lowerExpr exprAST
-              cases = map lowerCase casesAST
-          in IR.IRMatch expr cases
-        _ -> error "Multi-expression matching not supported in IR"
+    EMatch _ _ ->
+      -- Pattern matching not supported in primitive IR
+      error "Pattern matching not supported in primitive IR - should be desugared to if-then-else"
 
 lowerLambdaParam :: (AST KPattern, Maybe (AST KType)) -> (Text, IR.IRType)
 lowerLambdaParam (patAST, maybeTypeAST) = 
@@ -220,7 +192,17 @@ lowerLambdaParam (patAST, maybeTypeAST) =
                      Just typeAST -> lowerType (extractSyntax typeAST)
                      Nothing -> IR.IRTUnknown
       in (name, irType)
-    _ -> error "Only variable patterns supported in lambda parameters"
+    PWildcard ->
+      -- Generate a dummy name for wildcard patterns
+      let dummyName = "_wildcard"
+          irType = case maybeTypeAST of
+                     Just typeAST -> lowerType (extractSyntax typeAST)
+                     Nothing -> IR.IRTUnknown
+      in (dummyName, irType)
+    PLiteral _ ->
+      error "Literal patterns in lambda parameters not supported in primitive IR - use if-then-else instead"
+    PCons _ _ ->
+      error "Constructor patterns in lambda parameters not supported in primitive IR - use if-then-else instead"
 
 lowerLet :: AST KLet -> (Text, IR.IRType, IR.IRExpr)
 lowerLet astLet = 
@@ -234,35 +216,19 @@ lowerLet astLet =
                          Nothing -> IR.IRTUnknown
               irExpr = lowerExpr exprAST
           in (name, irType, irExpr)
-        _ -> error "Only variable patterns supported in let bindings"
+        PWildcard ->
+          -- Generate a dummy name for wildcard patterns in let bindings
+          let dummyName = "_let_wildcard"
+              irType = case maybeTypeAST of
+                         Just typeAST -> lowerType (extractSyntax typeAST)
+                         Nothing -> IR.IRTUnknown
+              irExpr = lowerExpr exprAST
+          in (dummyName, irType, irExpr)
+        PLiteral _ ->
+          error "Literal patterns in let bindings not supported in primitive IR - use if-then-else instead"
+        PCons _ _ ->
+          error "Constructor patterns in let bindings not supported in primitive IR - use if-then-else instead"
 
-lowerCase :: ([(AST KPattern, Maybe (AST KType))], AST KExpr) -> IR.IRCase
-lowerCase (patternsAST, exprAST) = 
-  -- Simplified: only handle single pattern cases  
-  case patternsAST of
-    [(patAST, _maybeType)] ->
-      let pattern = lowerPattern patAST
-          body = lowerExpr exprAST
-      in IR.IRCase pattern body
-    _ -> error "Multi-pattern cases not supported in IR"
-
-lowerPattern :: AST KPattern -> IR.IRPattern
-lowerPattern astPat = 
-  case unPattern (extractSyntax astPat) of
-    PVar varAST ->
-      let Var name = unVariable (extractSyntax varAST)
-      in IR.IRPatVar name IR.IRTUnknown  -- Type inference needed
-    
-    PWildcard ->
-      IR.IRPatWildcard IR.IRTUnknown
-    
-    PLiteral litAST ->
-      IR.IRPatLiteral (lowerLiteral (extractSyntax litAST))
-    
-    PCons ctorAST argPatsAST ->
-      let Var ctorName = unVariable (extractSyntax ctorAST)
-          argPatterns = map lowerPattern argPatsAST
-      in IR.IRPatConstructor ctorName argPatterns
 
 lowerLiteral :: Syntax AST KLiteral -> IR.IRLiteral
 lowerLiteral syntax = 
@@ -320,7 +286,7 @@ typeToIRType TST.TString = IR.IRTString
 typeToIRType TST.TBool = IR.IRTBool
 typeToIRType (TST.TFunction params returnType) = 
   IR.IRTFunction (map typeToIRType params) (typeToIRType returnType)
-typeToIRType (TST.TApplication name _args) = IR.IRTData name
+typeToIRType (TST.TApplication _name _args) = IR.IRTUnknown
 typeToIRType _ = IR.IRTUnknown
 
 -- Extract function parameter types and return type from type solver result
@@ -342,4 +308,9 @@ extractParamName (patAST, _) =
     PVar varAST ->
       let Var name = unVariable (extractSyntax varAST)
       in name
-    _ -> error "Only variable patterns supported in lambda parameters"
+    PWildcard ->
+      "_param_wildcard"  -- Generate dummy name for wildcard patterns
+    PLiteral _ ->
+      error "Literal patterns in function parameters not supported in primitive IR - use if-then-else instead"
+    PCons _ _ ->
+      error "Constructor patterns in function parameters not supported in primitive IR - use if-then-else instead"

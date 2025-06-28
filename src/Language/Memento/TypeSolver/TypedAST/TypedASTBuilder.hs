@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeOperators #-}
 
 -- | Compositional TypedAST construction
-module Language.Memento.TypeSolver.TypedASTBuilder 
+module Language.Memento.TypeSolver.TypedAST.TypedASTBuilder 
   ( -- * TypedAST construction functions
     buildTypedExpr,
     buildTypedVar,
@@ -31,8 +31,8 @@ import Language.Memento.Data.HProduct (HUnit(..), (:*:)((:*:)))
 import Language.Memento.Syntax
 import Language.Memento.Syntax.Metadata (Metadata(..))
 import Language.Memento.Syntax.Tag (KDefinition, KExpr, KLet, KLiteral, KPattern, KProgram, KType, KVariable)
-import Language.Memento.TypeSolver.TypeInfo
-import qualified Language.Memento.TypeSolver.Types as TSTypes
+import Language.Memento.TypeSolver.TypedAST.TypeInfo
+import qualified Language.Memento.TypeSolver.Core.Types as TSTypes
 import Text.Megaparsec (SourcePos)
 
 -- ============================================================================

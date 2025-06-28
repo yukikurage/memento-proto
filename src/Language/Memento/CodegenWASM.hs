@@ -19,7 +19,7 @@ import Language.Memento.CodegenWASM.Expressions
 import Language.Memento.CodegenWASM.Control
 import qualified Language.Memento.CodegenWASM.Data as Data
 import Language.Memento.TypedASTExtractor
-import Language.Memento.TypeSolver.TypeInfo (TypedAST)
+import Language.Memento.TypeSolver.TypedAST.TypeInfo (TypedAST)
 import Language.Memento.Syntax.Tag (KProgram)
 import Language.Memento.Syntax (AST)
 
@@ -42,18 +42,14 @@ generateWASMFromTypedAST astProgram typedAST =
 
 -- Compile entire IR program to WASM module
 compileProgram :: IR.IRProgram -> WASMModule
-compileProgram (IR.IRProgram dataDefs irFunctions irGlobals mainFunc) = 
-  let -- Build data context for proper type layouts
-      dataCtx = Data.buildDataContext dataDefs
-      
-      -- Lift lambdas to top-level functions
+compileProgram (IR.IRProgram irFunctions irGlobals mainFunc) = 
+  let -- Lift lambdas to top-level functions
       (liftedFunctions, liftedGlobals) = liftProgramLambdas irFunctions irGlobals
       
-      -- Compile all functions
-      constructorFunctions = map (Data.compileDataConstructor dataCtx) (concatMap getConstructorsFromDataDef dataDefs)
+      -- Compile all functions (no data constructors in primitive IR)
       globalFunctions = map Func.compileGlobalValue liftedGlobals
       realFunctions = map Func.compileFunctionDef liftedFunctions
-      allFunctions = constructorFunctions ++ globalFunctions ++ realFunctions
+      allFunctions = globalFunctions ++ realFunctions
       
       -- Assign type indices
       (typedFunctions, funcTypes) = Func.assignTypeIndices allFunctions
@@ -201,6 +197,3 @@ generateExportWAT (WASMExport name ExportMemory idx) =
 generateExportWAT (WASMExport name ExportTable idx) = 
   "(export \"" <> name <> "\" (table " <> T.pack (show idx) <> "))"
 
--- Helper functions moved to respective modules
-getConstructorsFromDataDef :: IR.IRDataDef -> [IR.IRConstructor]
-getConstructorsFromDataDef (IR.IRDataDef _ constructors) = constructors

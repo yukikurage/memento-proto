@@ -115,7 +115,6 @@ irTypeToWASM IR.IRTInt = I32
 irTypeToWASM IR.IRTBool = I32
 irTypeToWASM IR.IRTString = I32  -- String pointer
 irTypeToWASM (IR.IRTFunction _ _) = I32  -- Function pointer
-irTypeToWASM (IR.IRTData _) = I32  -- Data structure pointer
 irTypeToWASM IR.IRTUnknown = F64  -- Default to F64
 
 -- Convert WASM types to text representation

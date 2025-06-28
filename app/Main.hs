@@ -7,12 +7,13 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Language.Memento.Analysis.Hoisting (analyzeHoisting, formatHoistingWarnings)
 import Language.Memento.Codegen (generateJS)
+import Language.Memento.CodegenJS (generateJSFromIR)
 import Language.Memento.CodegenWASM (generateWASM)
 import Language.Memento.LowerToIR (lowerProgram, lowerProgramWithTypes)
 import Language.Memento.Parser (parseProgramText)
 import Language.Memento.TypeSolver (inferTypes)
 
-import Language.Memento.TypeSolver.Types (formatTypeEnv, formatTypeError)
+import Language.Memento.TypeSolver.Core.Types (formatTypeEnv, formatTypeError)
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.FilePath (takeBaseName, takeDirectory, (</>))
@@ -69,14 +70,14 @@ compileFile backend inputFile maybeOutputFile = do
           putStrLn ""
           putStrLn (formatHoistingWarnings hoistingAnalysis)
 
-          -- Generate code based on backend
+          -- Generate code based on backend (both now use IR)
+          let irProgram = lowerProgramWithTypes program typeEnv
           case backend of
             JavaScript -> do
-              let jsCode = generateJS program
+              let jsCode = generateJSFromIR irProgram
               TIO.writeFile outputFile jsCode
             WebAssembly -> do
-              let irProgram = lowerProgramWithTypes program typeEnv
-                  wasmCode = generateWASM irProgram
+              let wasmCode = generateWASM irProgram
               TIO.writeFile outputFile wasmCode
 
           putStrLn $ "Output written to: " ++ outputFile

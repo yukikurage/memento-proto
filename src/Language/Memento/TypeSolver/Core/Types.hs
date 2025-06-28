@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 
-module Language.Memento.TypeSolver.Types where
+module Language.Memento.TypeSolver.Core.Types where
 
 import Control.Monad (forM, zipWithM)
 import Control.Monad.Error.Class (MonadError (throwError))

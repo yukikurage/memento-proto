@@ -1,4 +1,4 @@
-# Memento Programming Language
+# Memento Programming Language (Prototype)
 
 Memento is an experimental functional programming language featuring advanced type inference, polymorphism, and pattern matching.
 
@@ -23,13 +23,13 @@ Memento supports both pipeline-style and modern declaration syntax:
 val x : number := 42;
 val message : string := "hello";
 
-// Function definitions  
+// Function definitions
 val increment : (x : number) => number := (x : number) => x + 1;
 val double : (x : number) => number := (x : number) => x * 2;
 
 // Polymorphic functions
 val identity<T> : (x : T) => T := (x : T) => x;
-val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C := 
+val compose<A, B, C> : (f : (b : B) => C, g : (a : A) => B, x : A) => C :=
   (f : (b : B) => C, g : (a : A) => B, x : A) => f(g(x));
 
 // Data declarations with separated constructor/type semantics
@@ -61,11 +61,13 @@ val process : (opt : Option) => number := (opt : Option) =>
 Memento features a sophisticated constraint-based type system:
 
 **Primitive Types:**
+
 - `number`: Numeric type with singleton literal types (`42 : 42`)
-- `bool`: Boolean type (`true : true`, `false : false`) 
+- `bool`: Boolean type (`true : true`, `false : false`)
 - `string`: String type (`"hello" : "hello"`)
 
 **Advanced Types:**
+
 - **Function Types**: `(param : InputType) => OutputType`
 - **Union Types**: `A | B` for alternatives
 - **Intersection Types**: `A & B` for combinations
@@ -73,6 +75,7 @@ Memento features a sophisticated constraint-based type system:
 - **Constructor Types**: Separate from type names
 
 **Type Inference:**
+
 ```memento
 // Explicit type annotation
 val x : number := 42;
@@ -146,6 +149,7 @@ stack build
 ### Example Programs
 
 **Basic Values and Functions:**
+
 ```memento
 val x : number := 42;
 val increment : (n : number) => number := (n : number) => n + 1;
@@ -153,6 +157,7 @@ val result : number := increment(x);  // 43
 ```
 
 **Polymorphic Functions:**
+
 ```memento
 val identity<T> : (x : T) => T := (x : T) => x;
 val test_num : number := identity(42);
@@ -160,6 +165,7 @@ val test_str : string := identity("hello");
 ```
 
 **Data Types and Pattern Matching:**
+
 ```memento
 data Some<T> : (value : T) => Option;
 data None : () => Option;
@@ -199,8 +205,9 @@ See `CLAUDE.md` for detailed development instructions.
 ## Current Status
 
 ✅ **Completed Features:**
+
 - Separated constructor/type semantics
-- Parametric polymorphism with type inference  
+- Parametric polymorphism with type inference
 - Pattern matching with exhaustivity checking
 - Singleton literal types (`42 : 42`)
 - Union and intersection types
@@ -208,6 +215,7 @@ See `CLAUDE.md` for detailed development instructions.
 - JavaScript code generation
 
 🚧 **In Progress:**
+
 - Multi-argument polymorphic function constraint optimization
 - Effect system integration
 - Library system

@@ -3,7 +3,7 @@
 
 {-# HLINT ignore "Use lambda-case" #-}
 
-module Language.Memento.TypeSolver.Assumption where
+module Language.Memento.TypeSolver.Constraints.Assumption where
 
 import Data.Bifunctor (Bifunctor (bimap))
 import qualified Data.Map.Strict as Map
@@ -11,9 +11,9 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace)
-import Language.Memento.TypeSolver.Normalize
-import Language.Memento.TypeSolver.Subtype
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Constraints.Normalize
+import Language.Memento.TypeSolver.Constraints.Subtype
+import Language.Memento.TypeSolver.Core.Types
 
 calculateGenericBounds :: TypeConstructorVariances -> AssumptionSet -> GenericBoundsMap
 calculateGenericBounds varMap assumptions =
@@ -64,7 +64,7 @@ decomposeAssumptionAll varMap assumptions =
 
 {- | Decomposes a assumption into assumptions.
 | (remained for later generics bound computation, decomposed)
-| TODO: Propagation
+| Includes constraint propagation for better inference
 -}
 decomposeAssumption :: TypeConstructorVariances -> Constraint -> (AssumptionSet, AssumptionSet)
 decomposeAssumption varMap cns = case cns of

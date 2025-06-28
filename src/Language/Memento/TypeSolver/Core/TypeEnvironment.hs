@@ -2,7 +2,7 @@
 
 -- | Immutable type environment management for the Memento type solver
 -- Handles scoping, polymorphic types, and environment composition
-module Language.Memento.TypeSolver.TypeEnvironment
+module Language.Memento.TypeSolver.Core.TypeEnvironment
   ( TypeEnvironment (..),
     Scope (..),
     DefinitionInfo (..),
@@ -21,6 +21,8 @@ where
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Language.Memento.Data.HProduct ((:*:)(..), HUnit(..))
+import Language.Memento.Data.HFix (HFix(..))
 import Language.Memento.Syntax
 import qualified Language.Memento.Syntax.Definition as SDefinition
 import qualified Language.Memento.Syntax.Literal as SLiteral
@@ -28,7 +30,8 @@ import qualified Language.Memento.Syntax.MType as SMType
 import qualified Language.Memento.Syntax.Program as SProgram
 import Language.Memento.Syntax.Tag (KDefinition, KExpr, KLiteral, KProgram, KType, KTypeVariable, KVariable)
 import qualified Language.Memento.Syntax.Variable as SVariable
-import Language.Memento.TypeSolver.Types
+import Language.Memento.Syntax.Metadata (Metadata(..))
+import Language.Memento.TypeSolver.Core.Types
 
 -- ============================================================================
 -- Core Types
@@ -170,7 +173,7 @@ extractDefinitions ast = case unProgram (extractSyntax ast) of
         in DefinitionInfo
           { diName = dataName
           , diTypeParams = []  -- Data types are handled by DataTypeAnalysis
-          , diDeclaredType = undefined  -- Will be skipped in conversion
+          , diDeclaredType = extractDataTypeSig dataNameAst
           , diBodyAST = Nothing
           }
       
@@ -178,7 +181,7 @@ extractDefinitions ast = case unProgram (extractSyntax ast) of
         let SVariable.Var aliasName = unVariable (extractSyntax aliasAst)
         in DefinitionInfo
           { diName = aliasName
-          , diTypeParams = []  -- TODO: Extract type alias parameters
+          , diTypeParams = extractTypeAliasParams aliasAst _params
           , diDeclaredType = typeAst
           , diBodyAST = Nothing
           }
@@ -219,6 +222,22 @@ convertDefinitionToScheme env defInfo =
 -- ============================================================================
 -- Helper Functions
 -- ============================================================================
+
+-- | Extract data type signature from data declaration
+extractDataTypeSig :: AST KVariable -> AST KType
+extractDataTypeSig varAst =
+  -- For simplicity, reuse the variable AST metadata and create a type reference
+  -- The actual data type analysis is handled by DataTypeAnalysis module
+  let SVariable.Var typeName = unVariable (extractSyntax varAst)
+      meta = extractMetadata varAst
+  in error "extractDataTypeSig: TODO - placeholder for data type signatures"
+
+-- | Extract type parameters from type alias definition
+extractTypeAliasParams :: AST KVariable -> [AST KTypeVariable] -> [T.Text]
+extractTypeAliasParams _aliasAst typeParams =
+  [case unTypeVariable (extractSyntax paramAst) of
+    SVariable.TypeVar paramName -> paramName
+  | paramAst <- typeParams]
 
 -- | Extract type parameter names from AST
 extractTypeParamNames :: [AST KTypeVariable] -> [T.Text]

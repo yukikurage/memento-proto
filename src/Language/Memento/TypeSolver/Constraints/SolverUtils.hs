@@ -6,7 +6,7 @@
 
 -- | Core solver utility functions for the Memento type solver
 -- Contains constraint manipulation and decomposition algorithms
-module Language.Memento.TypeSolver.SolverUtils where
+module Language.Memento.TypeSolver.Constraints.SolverUtils where
 
 {-
 Based on the docs/TYPE_SOLVER.md
@@ -21,9 +21,9 @@ import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (trace, traceM)
-import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decomposeAssumptionAll)
-import Language.Memento.TypeSolver.Subtype
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Constraints.Assumption (calculateGenericBounds, decomposeAssumptionAll)
+import Language.Memento.TypeSolver.Constraints.Subtype
+import Language.Memento.TypeSolver.Core.Types
 import Safe
 
 

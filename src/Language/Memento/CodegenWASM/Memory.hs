@@ -90,33 +90,8 @@ storeObjectField addr fieldIndex =
   , I32Store 4 0  -- Value should be on stack
   ]
 
--- Generate data constructor layout
-generateConstructorLayout :: IR.IRConstructor -> ObjectLayout
-generateConstructorLayout (IR.IRConstructor _name fields tag) =
-  let fieldSize = length fields * 4  -- 4 bytes per field (pointer size)
-      fieldOffsets = [i * 4 | i <- [0..length fields - 1]]
-  in ObjectLayout
-     { objTag = tag
-     , objSize = fieldSize
-     , objFields = fieldOffsets
-     }
-
--- Generate constructor allocation code
-generateConstructorAllocation :: IR.IRConstructor -> [Text] -> [WASMInstruction]
-generateConstructorAllocation ctor@(IR.IRConstructor _name fields tag) argNames =
-  let layout = generateConstructorLayout ctor
-      fieldCount = length fields
-  in allocateObject tag (objSize layout) ++
-     -- Store the allocated object address
-     [ LocalTee "obj_ptr" ] ++
-     -- Store each field
-     concatMap (\(i, argName) -> 
-       [ LocalGet "obj_ptr"
-       , LocalGet argName
-       , I32Store 4 (objectHeaderSize + i * 4)
-       ]) (zip [0..] argNames) ++
-     -- Return object pointer
-     [ LocalGet "obj_ptr" ]
+-- Note: Data constructor functions removed for primitive IR
+-- Primitive IR only supports basic types and functions, no user-defined data types
 
 -- Pattern matching support
 generateTagCheck :: Text -> Int -> [WASMInstruction]
@@ -189,9 +164,22 @@ generateStringAllocation str =
      , LocalGet "string_ptr"
      , I32Const utf8Bytes
      , I32Store 4 4
-     -- TODO: Store actual string bytes
-     , LocalGet "string_ptr"  -- Return string pointer
+     -- Store actual string bytes
+     ] ++ storeStringBytes str ++
+     [ LocalGet "string_ptr"  -- Return string pointer
      ]
+
+-- Store string bytes into memory (simplified version without ByteString)
+storeStringBytes :: Text -> [WASMInstruction]
+storeStringBytes str =
+  let -- For simplicity, store string as character codes (16-bit values)
+      charCodes = map (fromIntegral . fromEnum) (T.unpack str)
+      storeCharAt offset charCode =
+        [ LocalGet "string_ptr"
+        , I32Const charCode
+        , I32Store 0 (8 + fromIntegral (offset * 4))  -- Store 32-bit char at string data offset
+        ]
+  in concatMap (uncurry storeCharAt) (zip [0..] charCodes)
 
 -- Global heap pointer management
 heapGlobals :: [WASMGlobal]

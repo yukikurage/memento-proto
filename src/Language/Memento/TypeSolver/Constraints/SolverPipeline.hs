@@ -3,7 +3,7 @@
 {- | Modular solver pipeline for the Memento type solver
 Breaks down the solving process into composable, testable stages
 -}
-module Language.Memento.TypeSolver.SolverPipeline (
+module Language.Memento.TypeSolver.Constraints.SolverPipeline (
   SolverStage (..),
   SolverPipeline (..),
   SolverState (..),
@@ -27,12 +27,12 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Debug.Trace (traceM)
-import Language.Memento.TypeSolver.Assumption (calculateGenericBounds, decomposeAssumptionAll)
-import Language.Memento.TypeSolver.Contradiction (checkContradictions)
-import Language.Memento.TypeSolver.Normalize (normalizeConstraint)
-import Language.Memento.TypeSolver.Propagation (calculatePropagationAll)
-import Language.Memento.TypeSolver.SolverUtils (branchConstraints, decomposeConstraintsAll, substInstancesAsPossible)
-import Language.Memento.TypeSolver.Types
+import Language.Memento.TypeSolver.Constraints.Assumption (calculateGenericBounds, decomposeAssumptionAll)
+import Language.Memento.TypeSolver.Constraints.Contradiction (checkContradictions)
+import Language.Memento.TypeSolver.Constraints.Normalize (normalizeConstraint)
+import Language.Memento.TypeSolver.Constraints.Propagation (calculatePropagationAll)
+import Language.Memento.TypeSolver.Constraints.SolverUtils (branchConstraints, decomposeConstraintsAll, substInstancesAsPossible)
+import Language.Memento.TypeSolver.Core.Types
 
 -- ============================================================================
 -- Core Pipeline Types

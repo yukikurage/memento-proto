@@ -126,14 +126,7 @@ liftLambdas expr ctx = case expr of
     let (liftedExprs, finalCtx) = liftLambdasList exprs ctx
     in (IR.IRBlock liftedExprs, finalCtx)
     
-  IR.IRCtorApp ctorName args ->
-    let (liftedArgs, finalCtx) = liftLambdasList args ctx
-    in (IR.IRCtorApp ctorName liftedArgs, finalCtx)
-    
-  IR.IRMatch expr cases ->
-    let (liftedExpr, ctx1) = liftLambdas expr ctx
-        (liftedCases, ctx2) = liftLambdasCases cases ctx1
-    in (IR.IRMatch liftedExpr liftedCases, ctx2)
+  -- Note: Constructor applications and pattern matching not supported in primitive IR
     
   -- Base cases
   IR.IRVar _ -> (expr, ctx)
@@ -147,13 +140,7 @@ liftLambdasList (e:es) ctx =
       (liftedEs, ctx2) = liftLambdasList es ctx1
   in (liftedE:liftedEs, ctx2)
 
--- Helper for lifting lambdas in pattern match cases
-liftLambdasCases :: [IR.IRCase] -> FunctionContext -> ([IR.IRCase], FunctionContext)
-liftLambdasCases [] ctx = ([], ctx)
-liftLambdasCases (IR.IRCase pattern body : cases) ctx =
-  let (liftedBody, ctx1) = liftLambdas body ctx
-      (liftedCases, ctx2) = liftLambdasCases cases ctx1
-  in (IR.IRCase pattern liftedBody : liftedCases, ctx2)
+-- Note: Pattern match case lifting removed for primitive IR
 
 -- Generate function type signature
 generateFunctionType :: [WASMType] -> [WASMType] -> WASMFuncType
@@ -200,18 +187,7 @@ extractPatternVariables expr = case expr of
     extractPatternVariables cond ++ extractPatternVariables thenExpr ++ extractPatternVariables elseExpr
   IR.IRLet _ _ varExpr bodyExpr -> extractPatternVariables varExpr ++ extractPatternVariables bodyExpr
   IR.IRBlock exprs -> concatMap extractPatternVariables exprs
-  IR.IRCtorApp _ args -> concatMap extractPatternVariables args
-  IR.IRMatch expr cases -> 
-    extractPatternVariables expr ++ concatMap extractFromCase cases
-  where
-    extractFromCase (IR.IRCase pattern body) = 
-      extractFromPattern pattern ++ extractPatternVariables body
-      
-    extractFromPattern pattern = case pattern of
-      IR.IRPatVar varName _ -> [varName]
-      IR.IRPatWildcard _ -> []
-      IR.IRPatLiteral _ -> []
-      IR.IRPatConstructor _ argPatterns -> concatMap extractFromPattern argPatterns
+  -- Note: Constructor applications and pattern matching not supported in primitive IR
 
 -- Compile data constructor to WASM function (moved to Data.hs)
 -- This is now handled by Data.compileDataConstructor
@@ -232,7 +208,8 @@ generateFunctionRefs functions =
   concatMap (\(i, _func) -> 
     [ I32Const i
     , I32Const i  -- Function index same as table index for simplicity
-    -- TODO: elem.drop or table.set instruction would go here
+    -- Function table initialization handled by WASM runtime
+    -- Table setup requires more complex elem segment handling
     ]) (zip [0..] functions)
 
 -- Closure compilation
